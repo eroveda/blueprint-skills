@@ -3,7 +3,8 @@ name: generate-user-guide
 description: |
   Creates USER_GUIDE.md for end-users (not developers).
   Use when preparing onboarding material or end-user documentation.
-  Trigger with "generate user guide" or "document for end users".
+  Do NOT use for API docs (use generate-api-catalog) or technical architecture (use generate-architecture-doc).
+  Trigger with "generate user guide", "document for end users", or "create USER_GUIDE.md".
 ---
 
 # Generate User Guide

@@ -3,7 +3,8 @@ name: generate-functional-flows
 description: |
   Creates FUNCTIONAL_FLOWS.md describing user-facing flows in plain language.
   Use when documenting for non-technical stakeholders (managers, PMs, clients).
-  Trigger with "generate functional flows" or "document user flows".
+  Do NOT use for technical architecture (use generate-architecture-doc) or API docs (use generate-api-catalog).
+  Trigger with "generate functional flows", "document user flows", or "create FUNCTIONAL_FLOWS.md".
 ---
 
 # Generate Functional Flows Documentation
@@ -97,7 +98,7 @@ Numbered list of rules that govern the system:
 ## Quality Checklist
 
 - [ ] Every actor in the system is documented
-- [ ] Every endpoint has a corresponding flow
+- [ ] Every system capability has a corresponding flow
 - [ ] State machines are diagrammed in plain text
 - [ ] Business rules are numbered and unambiguous
 - [ ] No technical terms (HTTP, JSON, JWT, SQL)
