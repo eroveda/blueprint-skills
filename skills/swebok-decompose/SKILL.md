@@ -2,8 +2,9 @@
 name: swebok-decompose
 description: |
   Breaks down a project description into IEEE SWEBOK-categorized work nodes.
-  Use when starting a new project, planning architecture, or estimating scope.
-  Trigger with "decompose this project", "break down using SWEBOK", or "plan with SWEBOK".
+  Use after universal-framework (or directly for straightforward projects) to create the work breakdown.
+  Do NOT use for documentation generation or spec creation — those have their own skills.
+  Trigger with "decompose this project", "break down using SWEBOK", or "create work breakdown".
 ---
 
 # SWEBOK Decompose
@@ -38,6 +39,15 @@ Classify each node into ONE of:
 3. **Bootstrap is mandatory** — first node is always OPERATIONS for project setup
 4. **No invented features** — every node must trace back to the input
 5. **CONSTRUCTION ratio must be ≥ 40%** of total nodes
+
+## Multi-Layer Projects
+
+For projects with multiple layers (identified by `universal-framework`):
+
+1. Generate a **separate node list per layer**
+2. Each layer has its own Bootstrap node
+3. Cross-layer dependencies are marked in `depends_on` with the format `"layer:node_id"`
+4. Each layer must independently satisfy the CONSTRUCTION ratio ≥ 40%
 
 ## Output Format
 
@@ -87,37 +97,95 @@ validation:
 
 ## Example
 
-Input: "Multi-tenant task management API with admin, member, and client roles"
+Input: "A marketing automation platform where agencies manage contacts, design email campaigns, set up automations, and track performance"
 
 Output:
 ```yaml
+project:
+  name: "Marketing Automation Platform"
+  type: "SaaS Web Application"
+
+actors:
+  - name: "Agency Admin"
+    operations: ["manage users", "configure billing", "view all analytics"]
+  - name: "Marketer"
+    operations: ["manage contacts", "create campaigns", "set up automations", "view campaign analytics"]
+  - name: "Viewer"
+    operations: ["view campaign reports", "view contact lists"]
+
+entities:
+  - name: "Contact"
+    fields: ["id", "email", "name", "tags", "list_id", "created_at"]
+  - name: "Campaign"
+    fields: ["id", "name", "subject", "template_id", "status", "scheduled_at", "sent_at"]
+  - name: "Automation"
+    fields: ["id", "name", "trigger_type", "steps", "status"]
+  - name: "Event"
+    fields: ["id", "contact_id", "campaign_id", "type", "timestamp"]
+
 nodes:
   - id: "1"
     title: "Project Bootstrap and Environment Setup"
     category: "OPERATIONS"
+    purpose: "Initialize project structure, dependencies, database, and configuration"
+    depends_on: []
   - id: "2"
-    title: "Tenant and User Data Models"
+    title: "Contact, Campaign, Automation, and Event Data Models"
     category: "DESIGN"
+    purpose: "Define all entities, relationships, and database schema"
+    depends_on: ["1"]
   - id: "3"
-    title: "JWT Authentication Filter"
+    title: "Authentication and Role-Based Access"
     category: "SECURITY"
+    purpose: "Implement auth flow and role enforcement for Admin, Marketer, Viewer"
+    depends_on: ["1"]
   - id: "4"
-    title: "Project CRUD Endpoints"
+    title: "Contact and List Management"
     category: "CONSTRUCTION"
+    purpose: "CRUD for contacts and lists with import/export, tagging, segmentation"
+    depends_on: ["2", "3"]
   - id: "5"
-    title: "Task CRUD Endpoints"
+    title: "Campaign Builder and Scheduling"
     category: "CONSTRUCTION"
+    purpose: "Create, edit, preview, schedule, and send email campaigns"
+    depends_on: ["2", "3"]
   - id: "6"
-    title: "Task Status Workflow"
+    title: "Template Engine"
     category: "CONSTRUCTION"
+    purpose: "Create and manage reusable email templates with variable substitution"
+    depends_on: ["2"]
   - id: "7"
-    title: "Client Read-Only Dashboard"
+    title: "Automation Workflows"
     category: "CONSTRUCTION"
+    purpose: "Define triggers, conditions, and actions for drip sequences and auto-responses"
+    depends_on: ["2", "3", "4"]
   - id: "8"
-    title: "User Management Endpoints"
+    title: "Event Tracking and Analytics"
     category: "CONSTRUCTION"
+    purpose: "Track opens, clicks, bounces, conversions and aggregate into dashboards"
+    depends_on: ["2", "5"]
+  - id: "9"
+    title: "Billing and Usage Metering"
+    category: "CONSTRUCTION"
+    purpose: "Track email sends, contact limits, plan enforcement"
+    depends_on: ["2", "3"]
+  - id: "10"
+    title: "Notification System"
+    category: "CONSTRUCTION"
+    purpose: "In-app and webhook notifications for campaign events, automation triggers, billing alerts"
+    depends_on: ["2", "5", "7"]
 
 validation:
-  construction_ratio: "5/8 (63%)"
-  coverage: "5/5 operations covered"
+  total_nodes: 10
+  construction_count: 7
+  construction_ratio: "7/10 (70%)"
+  expected_operations:
+    - "Admin → Users → manage"
+    - "Admin → Billing → configure"
+    - "Marketer → Contacts → CRUD"
+    - "Marketer → Campaigns → create/schedule/send"
+    - "Marketer → Automations → create/configure"
+    - "Marketer → Analytics → view"
+    - "Viewer → Reports → view"
+  coverage: "7/7 operations covered"
 ```
