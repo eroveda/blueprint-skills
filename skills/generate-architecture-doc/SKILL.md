@@ -1,0 +1,130 @@
+---
+name: generate-architecture-doc
+description: |
+  Generates ARCHITECTURE.md following IEEE 15289 standards.
+  Use when documenting a new project, after adding components, or for project handoff.
+  Trigger with "generate architecture doc" or "document the architecture".
+---
+
+# Generate Architecture Documentation
+
+You create professional ARCHITECTURE.md files following IEEE/ISO 15289 (Life-cycle Information Items).
+
+## Document Structure
+
+```markdown
+# Architecture — [Project Name]
+
+## Overview
+Brief description of the system's purpose, scope, and primary actors.
+
+## Tech Stack
+| Layer | Technology | Version | Purpose |
+|---|---|---|---|
+| Runtime | ... | ... | ... |
+| Framework | ... | ... | ... |
+| Database | ... | ... | ... |
+| Auth | ... | ... | ... |
+
+## Component Architecture
+
+### Module: [name]
+- **Responsibility**: ...
+- **Public API**: classes/interfaces exposed
+- **Dependencies**: other modules consumed
+- **Database**: tables owned
+
+(Repeat for each module)
+
+## Data Model
+
+### Entities
+For each entity:
+- **Name** and primary key
+- **Fields** with types and constraints
+- **Relationships** to other entities
+- **Indexes** for performance
+
+### Migrations
+List of Flyway/Liquibase migrations in order, with what each one does.
+
+## API Contracts
+
+### Endpoints by Resource
+For each resource (e.g., Task, Project, User):
+- HTTP method + path
+- Request/response schemas
+- Auth requirements
+- Error responses
+
+## Cross-Cutting Concerns
+
+### Authentication & Authorization
+- Auth mechanism (JWT, OAuth, etc.)
+- Token claims structure
+- Role-based access control rules
+
+### Multi-Tenancy
+- Tenant isolation strategy
+- Tenant ID propagation
+- Cross-tenant data leak prevention
+
+### Rate Limiting
+- Limits per tenant/user
+- Implementation strategy
+- Headers exposed (X-RateLimit-*)
+
+### Logging & Observability
+- Log levels and structure
+- Tracing/metrics endpoints
+
+## Non-Functional Requirements
+
+| NFR | Target | Validation |
+|---|---|---|
+| Response time (P95) | < 100ms | Load test |
+| Concurrent users | 500 | Stress test |
+| Availability | 99.9% | Uptime monitoring |
+
+## Architectural Decisions (ADRs)
+
+### ADR-001: [Decision title]
+- **Status**: Accepted/Superseded
+- **Context**: Why this decision was needed
+- **Decision**: What was decided
+- **Consequences**: Trade-offs
+
+(Repeat for each significant decision)
+
+## Standards Compliance
+
+- IEEE SWEBOK v4.0 — used for component categorization
+- ISO/IEC/IEEE 12207 — software lifecycle processes
+- ISO/IEC/IEEE 15289 — documentation standards
+- (Additional standards as applicable)
+
+## Glossary
+
+Definitions of domain-specific terms used throughout the codebase.
+```
+
+## How to Use
+
+1. Read the project structure: source files, package layout, README
+2. Identify modules and their responsibilities
+3. Map entities and relationships from JPA/database files
+4. Extract API endpoints from controllers/resources
+5. Identify cross-cutting concerns from filters/interceptors
+6. Generate the document in the order above
+7. Save as ARCHITECTURE.md in project root
+
+## Quality Checklist
+
+- [ ] Tech stack table with exact versions
+- [ ] Each module has Responsibility, Public API, Dependencies
+- [ ] Entity diagram or table with all fields
+- [ ] All endpoints documented (no orphan controllers)
+- [ ] Auth flow described step-by-step
+- [ ] At least 3 ADRs for significant decisions
+- [ ] Standards compliance section
+- [ ] No code blocks longer than 20 lines (link to file instead)
