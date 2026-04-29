@@ -1,9 +1,10 @@
 ---
 name: generate-api-catalog
 description: |
-  Creates API_CATALOG.md mapping all endpoints with examples.
-  Use when documenting the API for consumers (frontend devs, integrators, partners).
-  Trigger with "generate API catalog" or "document the API".
+  Creates API_CATALOG.md or INTERFACE_CATALOG.md documenting all system interfaces with examples.
+  Use when documenting APIs, CLIs, SDKs, or message interfaces for consumers (frontend devs, integrators, partners).
+  Do NOT use for architecture overview (use generate-architecture-doc) or user-facing docs (use generate-user-guide).
+  Trigger with "generate API catalog", "document the API", or "create interface catalog".
 ---
 
 # Generate API Catalog
@@ -33,6 +34,30 @@ You create API_CATALOG.md that documents every endpoint with full request/respon
 | sub | UUID | `user_abc123` |
 | tenant_id | UUID | `tenant_xyz789` |
 | roles | string[] | `["admin"]` |
+
+### Authentication Flows
+
+Document the complete auth lifecycle:
+
+#### Registration
+1. [How a new user/client registers]
+2. [What credentials are issued]
+3. [Example request/response]
+
+#### Login
+1. [How to obtain an access token]
+2. [Token format and expiration]
+3. [Example request/response]
+
+#### Token Refresh
+1. [How to refresh an expired token]
+2. [Refresh token rotation policy]
+3. [Example request/response]
+
+#### Revocation
+1. [How to revoke a token/session]
+2. [What happens to active sessions]
+3. [Example request/response]
 
 ## Common Headers
 
@@ -94,6 +119,40 @@ curl -X POST https://.../api/.../tasks \
 
 (Repeat structure for GET list, GET single, PATCH, DELETE)
 
+## Interface Types
+
+Adapt the catalog structure to the project's interface type:
+
+### REST / GraphQL APIs
+Use the endpoint-by-resource structure above with HTTP method, path, request/response schemas, and cURL examples.
+
+### CLI Tools
+For each command:
+- Command syntax with arguments and flags
+- Description of what it does
+- Example invocation with expected output
+- Exit codes and their meanings
+
+### SDK / Library
+For each public function/method:
+- Signature with parameter types and return type
+- Description and usage example
+- Error/exception types
+
+### Message Queues / Event Streams
+For each topic/queue:
+- Message schema (publish and consume)
+- Routing/partitioning strategy
+- Example payload
+- Consumer group expectations
+
+### gRPC Services
+For each service/method:
+- Proto definition summary
+- Request/response message schemas
+- Streaming type (unary, server, client, bidirectional)
+- Example using grpcurl or client code
+
 ## Pagination
 
 Endpoints returning lists support pagination:
@@ -126,16 +185,17 @@ Standard structure for all events.
 
 ## How to Generate
 
-1. Scan all REST controllers/resources in the codebase
-2. For each endpoint, extract:
-   - HTTP method + path
-   - Request DTO (parse Java/TS class)
-   - Response DTO
-   - Validation annotations
-   - Auth annotations (@RolesAllowed, etc.)
-3. Generate cURL example for each endpoint
-4. Group by resource (Task, Project, User, etc.)
-5. Save as API_CATALOG.md
+1. Identify the project's interface type (REST, GraphQL, CLI, SDK, message queue, gRPC)
+2. Scan the codebase for interface definitions (controllers, route handlers, command definitions, proto files, public functions)
+3. For each interface, extract:
+   - Method/command/topic signature
+   - Input schema (request body, arguments, message format)
+   - Output schema (response, return value, published events)
+   - Validation rules
+   - Auth/permission requirements
+4. Generate usage examples for each interface (cURL, CLI invocation, code snippet, etc.)
+5. Group by resource or domain area
+6. Save as API_CATALOG.md or INTERFACE_CATALOG.md
 
 ## Quality Checklist
 
