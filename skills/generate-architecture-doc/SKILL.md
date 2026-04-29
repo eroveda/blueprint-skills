@@ -2,8 +2,9 @@
 name: generate-architecture-doc
 description: |
   Generates ARCHITECTURE.md following IEEE 15289 standards.
-  Use when documenting a new project, after adding components, or for project handoff.
-  Trigger with "generate architecture doc" or "document the architecture".
+  Use when documenting a new or existing project's technical architecture.
+  Do NOT use for user-facing docs (use generate-user-guide) or API docs (use generate-api-catalog).
+  Trigger with "generate architecture doc", "document the architecture", or "create ARCHITECTURE.md".
 ---
 
 # Generate Architecture Documentation
@@ -45,10 +46,12 @@ For each entity:
 - **Relationships** to other entities
 - **Indexes** for performance
 
-### Migrations
-List of Flyway/Liquibase migrations in order, with what each one does.
+### Schema Changes
+List of schema migrations or changes in order, with what each one does.
 
 ## API Contracts
+
+(Adapt this section to the project's interface type: REST endpoints, GraphQL schema, gRPC services, CLI commands, SDK methods, or message queue topics)
 
 ### Endpoints by Resource
 For each resource (e.g., Task, Project, User):
@@ -64,12 +67,12 @@ For each resource (e.g., Task, Project, User):
 - Token claims structure
 - Role-based access control rules
 
-### Multi-Tenancy
+### Multi-Tenancy (if applicable)
 - Tenant isolation strategy
 - Tenant ID propagation
 - Cross-tenant data leak prevention
 
-### Rate Limiting
+### Rate Limiting (if applicable)
 - Limits per tenant/user
 - Implementation strategy
 - Headers exposed (X-RateLimit-*)
@@ -112,9 +115,9 @@ Definitions of domain-specific terms used throughout the codebase.
 
 1. Read the project structure: source files, package layout, README
 2. Identify modules and their responsibilities
-3. Map entities and relationships from JPA/database files
-4. Extract API endpoints from controllers/resources
-5. Identify cross-cutting concerns from filters/interceptors
+3. Map entities and relationships from data model definitions (ORM models, schema files, migration scripts)
+4. Extract interfaces from the codebase (API endpoints, CLI commands, SDK methods, message handlers)
+5. Identify cross-cutting concerns from middleware, interceptors, decorators, or framework configuration
 6. Generate the document in the order above
 7. Save as ARCHITECTURE.md in project root
 
