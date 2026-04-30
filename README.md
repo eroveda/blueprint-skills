@@ -81,21 +81,30 @@ Blueprint is aligned with:
 - **ISO/IEC/IEEE 15289** — Documentation content standards
 - **ISO/IEC/IEEE 16326** — Project planning standards
 
-## Validated Use Cases
+## Validated Case Study
 
-The framework has been validated across 14+ project types:
+One complete walkthrough generated end-to-end with the seven skills. No manual edits were applied to the outputs.
 
-- REST APIs (multi-tenant, single-tenant)
-- E-commerce platforms
-- ETL/data pipelines
-- Mobile apps with offline sync
-- IoT systems (Arduino/ESP32)
-- Blockchain (smart contracts, DeFi, NFT)
-- Marketing SaaS (email, analytics)
-- Research/simulation tools
-- Industrial monitoring
+### [IoT Machine Monitoring](examples/iot-machine-monitoring/)
 
-See [examples/](examples/) for complete walkthroughs.
+**Industrial vibration monitoring with ESP32 sensors, MQTT backend, and a web dashboard.**
+
+From a 3-sentence prompt, the skills produced:
+
+- **36 work nodes** across 3 layers (firmware + backend + frontend), 22 CONSTRUCTION (61% ratio)
+- **36 executable specs** in 6 execution phases with parallelization identified
+- **IEEE 15289-compliant ARCHITECTURE.md** (615 lines) with 6 ADRs, NFRs, and a tech glossary
+- **Plain-language FUNCTIONAL_FLOWS.md** (533 lines) with 3 state machines and 38 numbered business rules
+- **End-user USER_GUIDE.md** (520 lines) with role-based onboarding, troubleshooting, and FAQs
+- **API_CATALOG.md** (1,605 lines) covering 40 endpoints across REST, WebSocket, and 5 MQTT topics
+
+Total: **5,367 lines of professional documentation** from a 3-sentence input. Standards referenced include IEEE SWEBOK v4.0, ISO/IEC/IEEE 12207, ISO/IEC/IEEE 15289, and ISO 10816 (industrial vibration severity).
+
+→ [Read the full case study](examples/iot-machine-monitoring/README.md)
+
+### Coming Soon
+
+Additional case studies validating the framework on simpler (REST APIs, CRUD SaaS) and different (ETL pipelines, mobile apps) project types are planned for v0.2. Contributions from real-world usage are welcome via pull requests.
 
 ## Philosophy
 
