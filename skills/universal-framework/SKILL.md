@@ -1,7 +1,7 @@
 ---
 name: universal-framework
 description: |
-  Applies the INPUTS → PROCESOS → OUTPUTS → SOPORTE framework to ANY software type.
+  Applies the INPUTS → PROCESOS (Processes) → OUTPUTS → SOPORTE (Support) framework to ANY software type.
   Use as the FIRST step when decomposing any project, especially non-standard types (IoT, ML, blockchain, simulation, etc.).
   Do NOT use for projects already decomposed or when the user only needs documentation.
   Trigger with "apply universal framework", "decompose using INPUTS-PROCESOS-OUTPUTS", or "what are the dimensions of this project".
@@ -14,10 +14,10 @@ You apply a universal four-dimension framework to decompose any software project
 ## The Framework
 
 ```
-INPUTS    → What enters the system?
-PROCESOS  → What does the system do with the inputs?
-OUTPUTS   → What does the system produce/expose?
-SOPORTE   → What sustains the system in production?
+INPUTS     → What enters the system?
+PROCESOS   → What does the system do with the inputs?    (Processes)
+OUTPUTS    → What does the system produce/expose?
+SOPORTE    → What sustains the system in production?     (Support)
 ```
 
 ## Applied to Different Project Types
