@@ -1,0 +1,2094 @@
+# ══════════════════════════════════════════════════════════════════
+# Industrial Machine Monitoring System — Executable Specifications
+# Generated from SWEBOK decomposition: 36 nodes, 3 layers
+# ══════════════════════════════════════════════════════════════════
+
+# ┌─────────────────────────────────────────────────┐
+# │           EXECUTION ORDER                       │
+# └─────────────────────────────────────────────────┘
+
+execution_order:
+  - phase: 1
+    specs:
+      - "L1-01: Firmware Project Bootstrap"
+      - "L2-01: Backend Project Bootstrap"
+      - "L3-01: Frontend Project Bootstrap"
+    reason: "No dependencies — each layer bootstraps independently"
+
+  - phase: 2
+    specs:
+      - "L1-02: Vibration Sensor Driver and Sampling"
+      - "L1-04: MQTT Message Schema Definition"
+      - "L1-12: Watchdog and Crash Recovery"
+      - "L2-02: Data Models"
+      - "L2-14: Deployment Pipeline"
+      - "L3-02: UI Component Library and Layout"
+    reason: "Depend only on their layer's bootstrap"
+
+  - phase: 3
+    specs:
+      - "L1-03: Signal Processing Pipeline"
+      - "L1-05: WiFi and MQTT Connectivity"
+      - "L2-03: API Contract Definition"
+      - "L2-04: Authentication and RBAC"
+      - "L2-05: MQTT Ingestion Service"
+    reason: "Depend on Phase 2 outputs (sensor driver, schemas, data models)"
+
+  - phase: 4
+    specs:
+      - "L1-06: Data Buffering for Offline Operation"
+      - "L1-07: Edge Anomaly Detection and Local Alerting"
+      - "L1-08: Remote Configuration and OTA Updates"
+      - "L1-09: Device Health Telemetry"
+      - "L1-10: Power Management"
+      - "L1-11: Secure Communication"
+      - "L2-06: Anomaly Detection Engine"
+      - "L2-08: Time-Series Query API"
+      - "L2-09: Machine and Sensor Management API"
+      - "L2-10: Device Configuration Push"
+      - "L2-12: User Management API"
+      - "L2-13: TSDB Retention and Downsampling"
+      - "L3-03: Authentication Flow"
+    reason: "Depend on connectivity, DSP, API contract, and auth modules"
+
+  - phase: 5
+    specs:
+      - "L2-07: Alert Management Service"
+      - "L2-11: WebSocket Real-Time Events"
+      - "L3-09: Real-Time WebSocket Integration"
+    reason: "Depend on anomaly detection, ingestion, and auth"
+
+  - phase: 6
+    specs:
+      - "L3-04: Machine Fleet Overview Page"
+      - "L3-05: Machine Detail View with Vibration Charts"
+      - "L3-06: Alert Dashboard and Management"
+      - "L3-07: Device Management Page"
+      - "L3-08: User Administration Page"
+      - "L3-10: Frontend Build and Deployment"
+    reason: "Depend on backend APIs and WebSocket — final integration layer"
+
+
+# ══════════════════════════════════════════════════════════════════
+#  LAYER 1: ESP32 SENSOR FIRMWARE
+# ══════════════════════════════════════════════════════════════════
+
+specs:
+
+  # ─────────────────────────────────────────────────
+  # L1-01: Firmware Project Bootstrap
+  # ─────────────────────────────────────────────────
+  - title: "L1-01: Firmware Project Bootstrap (ESP-IDF/PlatformIO)"
+    purpose: "Initialize the ESP32 firmware project with build system, partition table, and base configuration"
+    category: "OPERATIONS"
+
+    input_context: |
+      Starting from scratch. No prior code exists.
+      Target hardware: ESP32-S3 or ESP32-WROOM-32.
+      Toolchain: ESP-IDF v5.x with PlatformIO or native idf.py.
+
+    instructions:
+      - "Create project directory firmware/ with standard ESP-IDF structure: main/, components/, partitions.csv, sdkconfig.defaults"
+      - "Configure partitions.csv with: nvs (24KB), otadata (8KB), ota_0 (1.5MB), ota_1 (1.5MB), spiffs (64KB for certs)"
+      - "Create sdkconfig.defaults with: CONFIG_FREERTOS_HZ=1000, CONFIG_ESP_TASK_WDT_TIMEOUT_S=10, CONFIG_MQTT_TRANSPORT_SSL=y, CONFIG_SPIRAM_USE_MALLOC=y"
+      - "Create main/main.c with app_main() that initializes NVS, logs firmware version, and enters an idle loop"
+      - "Create components/ directory structure for: sensor_driver/, signal_processing/, mqtt_client/, config_manager/, health_monitor/"
+      - "Add CMakeLists.txt for each component with proper REQUIRES declarations"
+      - "Create a build script (build.sh) that runs idf.py build and outputs firmware.bin size"
+      - "Verify project compiles and generates firmware.bin"
+
+    constraints:
+      - "Must use ESP-IDF v5.x (not Arduino framework) for RTOS and peripheral control"
+      - "Partition table must support OTA (dual app partitions)"
+      - "PSRAM must be enabled for data buffering"
+      - "FreeRTOS tick rate 1000Hz for 1ms timing resolution"
+
+    acceptance_criteria:
+      - "idf.py build completes without errors"
+      - "firmware.bin size < 1.5MB (fits in OTA partition)"
+      - "Partition table validates with espressif partition tool"
+      - "NVS initializes successfully on boot (serial output confirms)"
+
+    dependencies:
+      hard: []
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Project structure with component directories
+      - Build system ready for incremental component development
+      - NVS flash initialized for key-value storage
+      - FreeRTOS environment with 1ms tick resolution
+
+    verification: "idf.py build && idf.py size"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-02: Vibration Sensor Driver and Sampling
+  # ─────────────────────────────────────────────────
+  - title: "L1-02: Vibration Sensor Driver and Sampling"
+    purpose: "Implement accelerometer driver to capture raw vibration data at 1kHz into a DMA buffer"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Firmware project bootstrapped (L1-01).
+      Component directory: components/sensor_driver/
+      FreeRTOS available with 1ms tick.
+      PSRAM enabled for large buffers.
+      Target sensor: ADXL345 (SPI) or MPU6050 (I2C) — support both via abstraction.
+
+    instructions:
+      - "Create components/sensor_driver/include/sensor_driver.h with: sensor_init(config), sensor_read_sample(sample_t*), sensor_start_continuous(callback), sensor_stop()"
+      - "Define sample_t struct: {int16_t x, y, z; int64_t timestamp_us;}"
+      - "Define sensor_config_t: {sensor_type_t type; uint16_t sample_rate_hz; gpio_num_t spi_cs/i2c_sda/i2c_scl; uint8_t i2c_addr;}"
+      - "Implement ADXL345 SPI driver in sensor_adxl345.c: init registers for full resolution ±16g, configure FIFO watermark, read via DMA SPI transaction"
+      - "Implement MPU6050 I2C driver in sensor_mpu6050.c: init registers for ±8g range, 1kHz ODR, DLPF at 42Hz"
+      - "Create a FreeRTOS task (sensor_task) pinned to core 1, priority 20, that reads samples at configured rate into a ring buffer"
+      - "Ring buffer: 4096 samples in PSRAM, lock-free single-producer/single-consumer using atomic read/write indices"
+      - "Add configurable sampling rate (100Hz, 500Hz, 1000Hz) via sensor_config_t"
+      - "Add unit test in test/test_sensor_driver.c: verify ring buffer wrap-around, overflow behavior, and sample timestamp monotonicity"
+
+    constraints:
+      - "Sampling task must run on dedicated core (core 1) to avoid jitter"
+      - "Maximum allowable jitter: ±50µs at 1kHz"
+      - "Ring buffer must not allocate dynamically after init"
+      - "Must support hot-swap between ADXL345 and MPU6050 via config"
+
+    acceptance_criteria:
+      - "Sensor initializes and reads non-zero values on connected hardware"
+      - "Ring buffer stores 4096 samples without corruption"
+      - "Sample timestamps are monotonically increasing"
+      - "Buffer overflow drops oldest samples (no crash)"
+      - "Sampling rate matches configured value within ±2%"
+      - "Unit tests pass: idf.py -T test build && run"
+
+    dependencies:
+      hard:
+        - "L1-01: Firmware Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - sensor_driver component with sensor_init(), sensor_read_sample(), sensor_start_continuous()
+      - Ring buffer API for consuming raw samples: ring_buffer_read(buf, count)
+      - sample_t struct with x/y/z acceleration and microsecond timestamp
+
+    verification: "idf.py build && idf.py -T sensor_driver test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-03: Signal Processing Pipeline
+  # ─────────────────────────────────────────────────
+  - title: "L1-03: Signal Processing Pipeline"
+    purpose: "Process raw vibration samples into frequency-domain features: FFT, RMS velocity, and peak acceleration"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Sensor driver (L1-02) provides raw samples via ring buffer.
+      Component directory: components/signal_processing/
+      PSRAM available for FFT working memory.
+      ESP-DSP library available for optimized FFT.
+
+    instructions:
+      - "Create components/signal_processing/include/signal_processing.h with: dsp_init(config), dsp_process_window(samples, count, result_t*)"
+      - "Define vibration_result_t: {float rms_accel_g; float peak_accel_g; float rms_velocity_mm_s; float dominant_freq_hz; float fft_magnitudes[FFT_SIZE/2]; int64_t window_start_us; int64_t window_end_us;}"
+      - "Implement Hanning window function applied to raw samples before FFT"
+      - "Implement 1024-point FFT using esp-dsp dsps_fft2r_fc32 (real-valued optimized)"
+      - "Calculate magnitude spectrum from FFT output: mag[i] = sqrt(re[i]^2 + im[i]^2) / (N/2)"
+      - "Find dominant frequency: index of max magnitude × (sample_rate / FFT_SIZE)"
+      - "Calculate RMS acceleration: sqrt(sum(x^2 + y^2 + z^2) / N) — use magnitude of 3-axis vector"
+      - "Calculate peak acceleration: max(sqrt(x^2 + y^2 + z^2)) over window"
+      - "Integrate acceleration to velocity (frequency domain): V(f) = A(f) / (2π·f), then RMS of velocity spectrum"
+      - "Create FreeRTOS task (dsp_task) on core 0, priority 10, consuming from sensor ring buffer in 1024-sample windows with 50% overlap"
+      - "Output vibration_result_t to a result queue (depth 8) for MQTT publishing"
+      - "Add unit tests: verify FFT of known sine wave produces correct frequency, RMS of constant signal equals constant"
+
+    constraints:
+      - "FFT size fixed at 1024 points (1.024s window at 1kHz)"
+      - "50% overlap between windows for continuous monitoring"
+      - "All floating-point math — no fixed-point (ESP32 has FPU)"
+      - "Must use esp-dsp for FFT — no custom implementation"
+      - "Processing must complete within half the window duration (512ms at 1kHz)"
+
+    acceptance_criteria:
+      - "FFT of 100Hz sine wave input produces dominant_freq_hz = 100.0 ± 1.0"
+      - "RMS of constant 1g input produces rms_accel_g = 1.0 ± 0.01"
+      - "Peak of known signal matches expected value"
+      - "Processing 1024-sample window completes in < 500ms"
+      - "Result queue receives one result per window"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L1-02: Vibration Sensor Driver and Sampling"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - signal_processing component with dsp_process_window()
+      - vibration_result_t struct with RMS, peak, dominant frequency, FFT magnitudes
+      - Result queue (FreeRTOS queue) for downstream consumers (MQTT, edge detection)
+
+    verification: "idf.py build && idf.py -T signal_processing test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-04: MQTT Message Schema Definition
+  # ─────────────────────────────────────────────────
+  - title: "L1-04: MQTT Message Schema Definition"
+    purpose: "Define the MQTT topic hierarchy and JSON payload schemas shared between firmware and backend"
+    category: "DESIGN"
+
+    input_context: |
+      Firmware project bootstrapped (L1-01).
+      This is a cross-layer contract: defines the interface between Layer 1 (ESP32) and Layer 2 (Backend).
+
+    instructions:
+      - "Create docs/mqtt_schema.yaml (or JSON Schema) defining all topics and payloads"
+      - "Define topic: machines/{machine_id}/vibration — published by device every processing window"
+      - |
+        Vibration payload schema:
+        {
+          "machine_id": "string (UUID)",
+          "sensor_id": "string (UUID)",
+          "timestamp": "string (ISO 8601 UTC)",
+          "rms_accel_g": "float",
+          "peak_accel_g": "float",
+          "rms_velocity_mm_s": "float",
+          "dominant_freq_hz": "float",
+          "fft_magnitudes": "array[float] (512 values, optional — only on request)",
+          "firmware_version": "string (semver)"
+        }
+      - "Define topic: machines/{machine_id}/health — published every 60s"
+      - |
+        Health payload schema:
+        {
+          "sensor_id": "string (UUID)",
+          "timestamp": "string (ISO 8601 UTC)",
+          "uptime_s": "uint32",
+          "free_heap_bytes": "uint32",
+          "wifi_rssi_dbm": "int8",
+          "battery_voltage_mv": "uint16 (0 if mains-powered)",
+          "firmware_version": "string (semver)"
+        }
+      - "Define topic: machines/{machine_id}/alerts — published on edge-detected anomaly"
+      - |
+        Alert payload schema:
+        {
+          "machine_id": "string (UUID)",
+          "sensor_id": "string (UUID)",
+          "timestamp": "string (ISO 8601 UTC)",
+          "alert_type": "string (enum: threshold_rms, threshold_peak, threshold_freq)",
+          "severity": "string (enum: warning, critical)",
+          "value": "float",
+          "threshold": "float"
+        }
+      - "Define topic: devices/{sensor_id}/config — subscribed by device (backend → device)"
+      - |
+        Config payload schema:
+        {
+          "sampling_rate_hz": "uint16 (100, 500, 1000)",
+          "reporting_interval_s": "uint16",
+          "threshold_rms_warning": "float",
+          "threshold_rms_critical": "float",
+          "threshold_peak_warning": "float",
+          "threshold_peak_critical": "float",
+          "include_fft": "bool",
+          "config_version": "uint32"
+        }
+      - "Define topic: devices/{sensor_id}/ota — OTA update trigger"
+      - |
+        OTA payload schema:
+        {
+          "firmware_url": "string (HTTPS URL)",
+          "firmware_version": "string (semver)",
+          "sha256": "string (hex)"
+        }
+      - "Define QoS levels: vibration=0 (best-effort), health=1 (at-least-once), alerts=1, config=1, ota=1"
+      - "Create shared header file components/mqtt_schema/include/mqtt_topics.h with topic format strings and QoS constants"
+      - "Create JSON serialization/deserialization helpers in components/mqtt_schema/mqtt_json.c using cJSON library"
+
+    constraints:
+      - "All timestamps ISO 8601 UTC (e.g., 2026-01-15T14:30:00.000Z)"
+      - "machine_id and sensor_id are UUIDs assigned during provisioning"
+      - "fft_magnitudes array is optional in vibration messages (controlled by include_fft config)"
+      - "Maximum MQTT message size: 4KB (excluding FFT), 8KB (with FFT)"
+      - "Topic names use lowercase with underscores in field names"
+
+    acceptance_criteria:
+      - "Schema document covers all 5 topics with complete field definitions"
+      - "mqtt_topics.h compiles and provides topic format strings"
+      - "JSON serialization round-trips all payload types without data loss"
+      - "Serialized vibration payload (without FFT) fits in 4KB"
+      - "Unit tests verify serialization/deserialization of all payload types"
+
+    dependencies:
+      hard:
+        - "L1-01: Firmware Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - MQTT topic hierarchy documentation (docs/mqtt_schema.yaml)
+      - mqtt_topics.h with topic format strings and QoS constants
+      - mqtt_json.c with cJSON serialization/deserialization for all payload types
+      - Shared contract consumed by L2-05 (MQTT Ingestion Service)
+
+    verification: "idf.py build && idf.py -T mqtt_schema test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-05: WiFi and MQTT Connectivity
+  # ─────────────────────────────────────────────────
+  - title: "L1-05: WiFi and MQTT Connectivity"
+    purpose: "Establish WiFi and TLS-secured MQTT connection with automatic reconnection and topic subscription"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      MQTT schemas defined (L1-04): topic strings, QoS levels, JSON serializers.
+      NVS available for storing WiFi credentials and broker config.
+      Component directory: components/mqtt_client/
+
+    instructions:
+      - "Create components/mqtt_client/include/mqtt_manager.h with: mqtt_manager_init(config), mqtt_manager_publish(topic, payload, qos), mqtt_manager_subscribe(topic, qos, callback), mqtt_manager_is_connected()"
+      - "Define mqtt_config_t: {char* broker_uri; char* client_id; char* username; char* password; const uint8_t* ca_cert; size_t ca_cert_len;}"
+      - "Implement WiFi STA initialization using esp_wifi: connect with SSID/password from NVS"
+      - "Implement WiFi reconnection with exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s"
+      - "Implement MQTT client using esp_mqtt_client: TLS with CA certificate from SPIFFS, auto-reconnect enabled"
+      - "On MQTT connect event: subscribe to devices/{sensor_id}/config (QoS 1) and devices/{sensor_id}/ota (QoS 1)"
+      - "Implement publish function that queues messages if disconnected (up to 32 pending messages)"
+      - "Create a connectivity status FreeRTOS event group with bits: WIFI_CONNECTED, MQTT_CONNECTED"
+      - "Log connection state transitions to serial output"
+      - "Add integration test: verify MQTT connect, publish, and subscribe against local Mosquitto broker"
+
+    constraints:
+      - "Must use TLS for MQTT (no plaintext connections)"
+      - "Client ID must be unique per device (use MAC address or provisioned UUID)"
+      - "Publish queue depth: 32 messages max — oldest dropped on overflow"
+      - "WiFi reconnection must not block sensor sampling (runs on separate task)"
+      - "MQTT keep-alive: 60 seconds"
+
+    acceptance_criteria:
+      - "Connects to WiFi and MQTT broker within 10s on startup (serial log confirms)"
+      - "Reconnects automatically after WiFi/MQTT disconnection"
+      - "Publishes message to correct topic with correct QoS"
+      - "Receives messages on subscribed config topic"
+      - "Queued messages are sent after reconnection"
+      - "TLS handshake succeeds with valid CA certificate"
+
+    dependencies:
+      hard:
+        - "L1-04: MQTT Message Schema Definition"
+      integrates_with:
+        - "L1-11: Secure Communication"
+
+    handoff: |
+      Provides:
+      - mqtt_manager component with publish/subscribe API
+      - Connectivity event group for other tasks to wait on
+      - Subscribed callback mechanism for config and OTA topics
+
+    verification: "idf.py build && idf.py -T mqtt_client test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-06: Data Buffering for Offline Operation
+  # ─────────────────────────────────────────────────
+  - title: "L1-06: Data Buffering for Offline Operation"
+    purpose: "Buffer vibration results in PSRAM during connectivity loss and drain on reconnect"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Signal processing (L1-03) outputs vibration_result_t to a result queue.
+      MQTT manager (L1-05) provides connectivity status event group.
+      PSRAM enabled and available.
+
+    instructions:
+      - "Create components/data_buffer/include/data_buffer.h with: buffer_init(capacity), buffer_push(vibration_result_t*), buffer_pop(vibration_result_t*), buffer_count(), buffer_is_full()"
+      - "Implement persistent ring buffer in PSRAM: capacity 1000 vibration_result_t entries (~200KB)"
+      - "Create a publisher task (priority 5, core 0) that: reads from DSP result queue, checks MQTT connectivity, if connected: publish immediately via mqtt_manager_publish, if disconnected: push to offline buffer"
+      - "On MQTT reconnect event: drain offline buffer in chronological order, rate-limited to 10 messages/second to avoid broker overload"
+      - "Add buffer overflow strategy: drop oldest entry when full, increment a dropped_count counter"
+      - "Include dropped_count in next health telemetry message"
+      - "Add unit tests: verify FIFO ordering, overflow behavior, drain ordering after simulated reconnect"
+
+    constraints:
+      - "Buffer must be in PSRAM (not heap) to preserve main RAM for tasks"
+      - "Drain rate: max 10 msg/s to prevent broker/backend overload"
+      - "Buffer entries must preserve original timestamps (no re-timestamping on drain)"
+      - "Buffer state survives light sleep (PSRAM retained) but not deep sleep"
+
+    acceptance_criteria:
+      - "Buffered messages are published in chronological order after reconnect"
+      - "Buffer overflow drops oldest and increments counter"
+      - "Drain does not exceed 10 msg/s rate"
+      - "No messages lost during normal operation (connected state)"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L1-03: Signal Processing Pipeline"
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Transparent publish-or-buffer layer between DSP output and MQTT
+      - dropped_count metric for health reporting
+
+    verification: "idf.py build && idf.py -T data_buffer test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-07: Edge Anomaly Detection and Local Alerting
+  # ─────────────────────────────────────────────────
+  - title: "L1-07: Edge Anomaly Detection and Local Alerting"
+    purpose: "Compare vibration results against configurable thresholds and trigger local and remote alerts"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Signal processing (L1-03) outputs vibration_result_t.
+      MQTT manager (L1-05) can publish to machines/{id}/alerts topic.
+      Config manager will provide threshold values (from NVS defaults or remote config).
+
+    instructions:
+      - "Create components/edge_detector/include/edge_detector.h with: edge_detector_init(thresholds), edge_detector_evaluate(vibration_result_t*, alert_t*), edge_detector_update_thresholds(thresholds)"
+      - "Define alert_thresholds_t: {float rms_warning; float rms_critical; float peak_warning; float peak_critical;}"
+      - "Define alert_t: {alert_type_t type; severity_t severity; float value; float threshold; int64_t timestamp;}"
+      - "Implement threshold comparison: compare rms_accel_g and peak_accel_g against warning and critical thresholds"
+      - "Implement cooldown: suppress duplicate alerts of same type for 60 seconds after last firing"
+      - "On alert: publish JSON to machines/{machine_id}/alerts topic (QoS 1)"
+      - "On alert: drive GPIO for LED (warning=yellow blink, critical=red solid) and buzzer (critical only, 1s pulse)"
+      - "Load default thresholds from NVS on init; update when remote config received"
+      - "Add unit tests: verify threshold logic, cooldown timing, severity classification"
+
+    constraints:
+      - "Cooldown period: 60 seconds per alert type (not global)"
+      - "LED/buzzer GPIOs configurable via sdkconfig"
+      - "Alert evaluation must be non-blocking (< 1ms per evaluation)"
+      - "Thresholds can be updated at runtime without restart"
+
+    acceptance_criteria:
+      - "RMS value exceeding warning threshold produces warning alert"
+      - "RMS value exceeding critical threshold produces critical alert"
+      - "Duplicate alert within 60s cooldown is suppressed"
+      - "Alert JSON published to correct MQTT topic"
+      - "LED and buzzer activate on alert (GPIO toggle verified in test)"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L1-03: Signal Processing Pipeline"
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with:
+        - "L1-08: Remote Configuration and OTA"
+
+    handoff: |
+      Provides:
+      - edge_detector component with runtime-updatable thresholds
+      - Alert publishing to MQTT for backend consumption (L2-07)
+      - Local indication via LED/buzzer
+
+    verification: "idf.py build && idf.py -T edge_detector test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-08: Remote Configuration and OTA Updates
+  # ─────────────────────────────────────────────────
+  - title: "L1-08: Remote Configuration and OTA Updates"
+    purpose: "Receive configuration changes and firmware updates via MQTT, apply them safely"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      MQTT manager (L1-05) provides subscribe callback for devices/{sensor_id}/config and devices/{sensor_id}/ota topics.
+      NVS available for persistent config storage.
+      Dual OTA partitions defined in partition table (L1-01).
+
+    instructions:
+      - "Create components/config_manager/include/config_manager.h with: config_init(), config_get(key, value), config_set(key, value), config_on_update(callback)"
+      - "Implement MQTT config handler: parse JSON from devices/{sensor_id}/config, validate fields, store in NVS, notify registered callbacks"
+      - "Configurable parameters: sampling_rate_hz, reporting_interval_s, threshold_rms_warning, threshold_rms_critical, threshold_peak_warning, threshold_peak_critical, include_fft"
+      - "Implement config_version tracking: only apply config if incoming version > current version"
+      - "Implement OTA handler: parse devices/{sensor_id}/ota message, download firmware from HTTPS URL, verify SHA256 hash, flash to inactive OTA partition, reboot"
+      - "OTA progress: publish progress percentage to devices/{sensor_id}/ota/status topic"
+      - "OTA rollback: if new firmware fails health check within 60s of boot, rollback to previous partition"
+      - "Add integration test: verify config update round-trip (receive → store → read back)"
+
+    constraints:
+      - "Config updates must not require device reboot (hot-reload)"
+      - "OTA download must not block sensor sampling (run on separate low-priority task)"
+      - "OTA firmware must be verified (SHA256) before flashing"
+      - "Config version must be monotonically increasing"
+      - "Rollback triggered if app_main doesn't call esp_ota_mark_app_valid within 60s"
+
+    acceptance_criteria:
+      - "Config message updates NVS and triggers callbacks"
+      - "Stale config (lower version) is rejected"
+      - "OTA downloads, verifies, and flashes new firmware"
+      - "OTA with wrong SHA256 is rejected (no flash)"
+      - "Rollback occurs on failed boot (simulated)"
+      - "Tests pass"
+
+    dependencies:
+      hard:
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with:
+        - "L1-07: Edge Anomaly Detection"
+        - "L1-02: Vibration Sensor Driver"
+
+    handoff: |
+      Provides:
+      - config_manager component for reading/updating device parameters at runtime
+      - OTA update mechanism consuming backend-pushed firmware URLs
+      - Callback registration for config change notifications
+
+    verification: "idf.py build && idf.py -T config_manager test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-09: Device Health Telemetry
+  # ─────────────────────────────────────────────────
+  - title: "L1-09: Device Health Telemetry"
+    purpose: "Periodically publish device health metrics to the backend for fleet monitoring"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      MQTT manager (L1-05) provides publish API.
+      MQTT schema (L1-04) defines health topic and payload.
+      Data buffer (L1-06) exposes dropped_count.
+
+    instructions:
+      - "Create components/health_monitor/include/health_monitor.h with: health_monitor_init(interval_s), health_monitor_start(), health_monitor_stop()"
+      - "Create FreeRTOS timer task that fires every reporting_interval_s (default 60s)"
+      - "Collect metrics: esp_timer_get_time() for uptime, esp_get_free_heap_size(), esp_wifi_sta_get_ap_info() for RSSI, ADC read for battery voltage (if applicable)"
+      - "Include dropped_count from data buffer and reset it after reporting"
+      - "Serialize to JSON per health schema, publish to machines/{machine_id}/health (QoS 1)"
+      - "Include firmware_version from esp_app_get_description()"
+      - "Add unit test: verify JSON output format matches schema"
+
+    constraints:
+      - "Health publish interval configurable via remote config (min 10s, max 300s)"
+      - "Health publish must not interfere with vibration data publishing"
+      - "Battery voltage ADC read must use calibrated efuse values if available"
+
+    acceptance_criteria:
+      - "Health message published every 60s (default) to correct topic"
+      - "JSON payload matches health schema exactly"
+      - "All fields populated with valid values"
+      - "dropped_count resets to 0 after reporting"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with:
+        - "L1-06: Data Buffering"
+
+    handoff: |
+      Provides:
+      - Periodic health telemetry for backend fleet monitoring (L2-05)
+      - Battery and connectivity status for device management dashboard (L3-07)
+
+    verification: "idf.py build && idf.py -T health_monitor test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-10: Power Management
+  # ─────────────────────────────────────────────────
+  - title: "L1-10: Power Management"
+    purpose: "Implement sleep/wake cycle to optimize power consumption between sampling bursts"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Sensor driver (L1-02) provides start/stop for sampling control.
+      MQTT manager (L1-05) connectivity state determines sleep eligibility.
+
+    instructions:
+      - "Create components/power_manager/include/power_manager.h with: power_init(config), power_enter_light_sleep(duration_ms), power_get_wake_reason()"
+      - "Define power_config_t: {uint32_t active_duration_ms; uint32_t sleep_duration_ms; bool enable_sleep;}"
+      - "Implement duty cycle: sample for active_duration_ms, then light sleep for sleep_duration_ms"
+      - "Configure wake sources: timer (primary), GPIO (for external interrupt from sensor FIFO watermark)"
+      - "Before sleep: ensure MQTT publish queue is drained, stop sensor sampling"
+      - "After wake: restart sensor sampling, re-check MQTT connection"
+      - "If power saving disabled (mains-powered): continuous sampling, no sleep"
+      - "Log power state transitions to serial"
+      - "Add unit test: verify state machine transitions (active → pre-sleep → sleep → wake → active)"
+
+    constraints:
+      - "Light sleep only (not deep sleep) — PSRAM and WiFi state must be preserved"
+      - "Sleep mode configurable via remote config (can be disabled for mains-powered units)"
+      - "Must drain MQTT queue before entering sleep"
+      - "Wake latency must be < 5ms (light sleep guarantee)"
+
+    acceptance_criteria:
+      - "Device enters light sleep after active period"
+      - "Device wakes on timer and resumes sampling"
+      - "Current draw during sleep measurably lower than active (multimeter test)"
+      - "No data loss during sleep/wake transitions"
+      - "Mains-powered config disables sleep entirely"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L1-02: Vibration Sensor Driver"
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Power management for battery-powered deployments
+      - Configurable duty cycle for power vs. data resolution tradeoff
+
+    verification: "idf.py build && idf.py -T power_manager test"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-11: Secure Communication
+  # ─────────────────────────────────────────────────
+  - title: "L1-11: Secure Communication"
+    purpose: "Implement TLS certificate management, secure boot, and device identity"
+    category: "SECURITY"
+
+    input_context: |
+      MQTT manager (L1-05) uses TLS.
+      SPIFFS partition available for certificate storage.
+      ESP-IDF secure boot and flash encryption APIs available.
+
+    instructions:
+      - "Store CA certificate in SPIFFS partition (/certs/ca.pem)"
+      - "Implement certificate loading from SPIFFS on boot for MQTT TLS"
+      - "Generate unique device identity from ESP32 MAC address or efuse-burned UUID"
+      - "Store device identity in NVS for consistent client_id across reboots"
+      - "Document secure boot enablement procedure in docs/security.md (one-time efuse burn)"
+      - "Document flash encryption procedure in docs/security.md"
+      - "Add certificate expiry check: warn via health telemetry 30 days before expiry"
+      - "Implement certificate rotation: accept new CA cert via OTA config, store, and use on next reconnect"
+
+    constraints:
+      - "Secure boot and flash encryption are documented but not enabled by default (irreversible efuse burn)"
+      - "CA certificate must be replaceable without firmware update"
+      - "Device identity must persist across OTA updates"
+      - "No plaintext secrets in firmware binary"
+
+    acceptance_criteria:
+      - "MQTT connects with TLS using SPIFFS-stored CA certificate"
+      - "Device identity consistent across reboots"
+      - "Certificate expiry warning appears in health telemetry"
+      - "Security documentation is complete and accurate"
+
+    dependencies:
+      hard:
+        - "L1-05: WiFi and MQTT Connectivity"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - TLS certificate management for secure MQTT
+      - Unique device identity for fleet tracking
+      - Security hardening documentation
+
+    verification: "idf.py build"
+
+
+  # ─────────────────────────────────────────────────
+  # L1-12: Watchdog and Crash Recovery
+  # ─────────────────────────────────────────────────
+  - title: "L1-12: Watchdog and Crash Recovery"
+    purpose: "Ensure device self-recovery from crashes and task hangs via watchdog and panic handling"
+    category: "OPERATIONS"
+
+    input_context: |
+      Firmware project bootstrapped (L1-01).
+      FreeRTOS task watchdog available via ESP-IDF.
+
+    instructions:
+      - "Enable task watchdog timer (TWDT) with 10-second timeout in sdkconfig"
+      - "Register all critical tasks (sensor_task, dsp_task, mqtt_task, publisher_task) with TWDT"
+      - "Implement esp_task_wdt_reset() calls in each task's main loop"
+      - "Configure panic handler to store core dump to flash partition (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y)"
+      - "On boot: check for stored core dump, log crash info to serial, report crash count in health telemetry"
+      - "Implement boot counter in NVS: increment on each boot, reset after 60s of stable operation"
+      - "If boot counter > 3: enter safe mode (WiFi + MQTT only, no sensor sampling) to allow OTA recovery"
+      - "Add reboot reason logging: distinguish watchdog reset, panic, power cycle, OTA reboot"
+
+    constraints:
+      - "Watchdog timeout: 10 seconds (must be longer than any single processing cycle)"
+      - "Core dump partition: 64KB (sufficient for single-task state)"
+      - "Safe mode must still allow OTA updates for recovery"
+      - "Boot counter threshold: 3 consecutive crash-reboots"
+
+    acceptance_criteria:
+      - "Watchdog triggers reboot if a task hangs for > 10s"
+      - "Core dump is stored and retrievable after crash"
+      - "Boot counter increments and safe mode activates after 3 consecutive crashes"
+      - "Safe mode allows MQTT connection and OTA updates"
+      - "Normal operation resets boot counter"
+
+    dependencies:
+      hard:
+        - "L1-01: Firmware Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - System stability guarantees for unattended operation
+      - Crash diagnostics via core dumps and boot counters
+      - Safe mode recovery path via OTA
+
+    verification: "idf.py build"
+
+
+  # ══════════════════════════════════════════════════════════════════
+  #  LAYER 2: BACKEND API & INGESTION
+  # ══════════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────
+  # L2-01: Backend Project Bootstrap
+  # ─────────────────────────────────────────────────
+  - title: "L2-01: Backend Project Bootstrap"
+    purpose: "Initialize backend project with framework, database connections, and local dev environment"
+    category: "OPERATIONS"
+
+    input_context: |
+      Starting from scratch for the backend layer.
+      Target stack: Python (FastAPI) or Go (Gin/Echo) or Node.js (NestJS).
+      Databases: TimescaleDB (time-series), PostgreSQL (relational).
+      Message broker: MQTT (Mosquitto or EMQX).
+
+    instructions:
+      - "Create backend/ directory with standard project layout: src/ (or app/), tests/, migrations/, config/, docker/"
+      - "Initialize dependency management (requirements.txt/go.mod/package.json)"
+      - "Create docker-compose.yaml with services: app (backend), timescaledb (PostgreSQL + TimescaleDB extension), mosquitto (MQTT broker), redis (optional — for caching)"
+      - "Configure TimescaleDB: create database 'machine_monitoring', enable timescaledb extension"
+      - "Configure Mosquitto: listener 1883 (internal), listener 8883 (TLS), persistence true, max_queued_messages 1000"
+      - "Create application entry point with health check endpoint: GET /api/health → {status: 'ok', timestamp: '...'}"
+      - "Set up database connection pool (max 20 connections)"
+      - "Set up MQTT client connection to Mosquitto broker"
+      - "Create migration tooling setup (Alembic/golang-migrate/Knex)"
+      - "Create Makefile with targets: dev (docker-compose up), test, migrate, lint"
+      - "Add .env.example with all required environment variables"
+      - "Verify: docker-compose up, health endpoint responds, DB and MQTT connections succeed"
+
+    constraints:
+      - "Docker Compose for local development — no cloud dependencies for dev"
+      - "TimescaleDB version ≥ 2.11 (continuous aggregates with real-time)"
+      - "All config via environment variables (12-factor)"
+      - "No ORM for time-series queries (raw SQL for performance)"
+      - "ORM acceptable for relational entities (machines, users, alerts)"
+
+    acceptance_criteria:
+      - "docker-compose up starts all services without errors"
+      - "GET /api/health returns 200 with JSON body"
+      - "Database connection pool established (log confirms)"
+      - "MQTT client connects to Mosquitto (log confirms)"
+      - "make test runs (even with zero tests)"
+
+    dependencies:
+      hard: []
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Backend project structure with running dev environment
+      - Database connection pool (TimescaleDB + PostgreSQL)
+      - MQTT client connection to broker
+      - Health check endpoint at GET /api/health
+      - Migration tooling ready for schema creation
+
+    verification: "docker-compose up -d && curl http://localhost:8000/api/health && make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-02: Data Models
+  # ─────────────────────────────────────────────────
+  - title: "L2-02: Data Models — Machine, Sensor, Alert, User"
+    purpose: "Define relational and time-series database schemas with migrations"
+    category: "DESIGN"
+
+    input_context: |
+      Backend bootstrapped (L2-01): database connections, migration tooling ready.
+      TimescaleDB for time-series, PostgreSQL for relational data.
+
+    instructions:
+      - "Create migration: machines table — id (UUID PK), name (VARCHAR 255), location (VARCHAR 255), status (ENUM: healthy, warning, critical), created_at (TIMESTAMPTZ), updated_at (TIMESTAMPTZ)"
+      - "Create migration: sensors table — id (UUID PK), machine_id (UUID FK → machines), position (VARCHAR 100), type (VARCHAR 50), firmware_version (VARCHAR 20), last_seen_at (TIMESTAMPTZ), created_at (TIMESTAMPTZ)"
+      - "Create migration: users table — id (UUID PK), email (VARCHAR 255 UNIQUE), password_hash (VARCHAR 255), name (VARCHAR 255), role (ENUM: admin, engineer, viewer), created_at (TIMESTAMPTZ), updated_at (TIMESTAMPTZ)"
+      - "Create migration: alerts table — id (UUID PK), machine_id (UUID FK → machines), sensor_id (UUID FK → sensors), severity (ENUM: info, warning, critical), alert_type (VARCHAR 50), status (ENUM: open, acknowledged, resolved), value (FLOAT), threshold (FLOAT), detected_at (TIMESTAMPTZ), acknowledged_by (UUID FK → users, NULLABLE), acknowledged_at (TIMESTAMPTZ, NULLABLE), resolved_at (TIMESTAMPTZ, NULLABLE), notes (TEXT, NULLABLE)"
+      - "Create TimescaleDB hypertable: vibration_readings — time (TIMESTAMPTZ NOT NULL), machine_id (UUID), sensor_id (UUID), rms_accel_g (FLOAT), peak_accel_g (FLOAT), rms_velocity_mm_s (FLOAT), dominant_freq_hz (FLOAT). Create hypertable with chunk_interval = 1 day"
+      - "Create TimescaleDB hypertable: device_health — time (TIMESTAMPTZ NOT NULL), sensor_id (UUID), uptime_s (INTEGER), free_heap_bytes (INTEGER), wifi_rssi_dbm (SMALLINT), battery_voltage_mv (SMALLINT), firmware_version (VARCHAR 20). Create hypertable with chunk_interval = 1 day"
+      - "Add indexes: machines(status), sensors(machine_id), alerts(machine_id, status), alerts(detected_at), vibration_readings(machine_id, time DESC), device_health(sensor_id, time DESC)"
+      - "Create ORM models (or structs) for relational entities"
+      - "Run migrations and verify all tables exist"
+
+    constraints:
+      - "UUIDs for all primary keys (not auto-increment)"
+      - "All timestamps TIMESTAMPTZ (timezone-aware, stored as UTC)"
+      - "TimescaleDB hypertables with 1-day chunks"
+      - "Indexes must support dashboard queries: latest N readings per machine, alerts by status"
+      - "No cascade deletes — machines with sensors cannot be deleted"
+
+    acceptance_criteria:
+      - "All migrations run without errors"
+      - "All tables and hypertables exist with correct columns"
+      - "Indexes created successfully"
+      - "ORM models map correctly to tables"
+      - "Foreign key constraints enforced (test: insert sensor with invalid machine_id fails)"
+
+    dependencies:
+      hard:
+        - "L2-01: Backend Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Relational tables: machines, sensors, users, alerts
+      - TimescaleDB hypertables: vibration_readings, device_health
+      - ORM models for relational entities
+      - Database schema ready for API and ingestion development
+
+    verification: "make migrate && make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-03: API Contract Definition
+  # ─────────────────────────────────────────────────
+  - title: "L2-03: API Contract Definition"
+    purpose: "Define REST API endpoints, request/response schemas, and WebSocket event format"
+    category: "DESIGN"
+
+    input_context: |
+      Data models defined (L2-02): machines, sensors, users, alerts, vibration_readings, device_health.
+      Backend framework initialized (L2-01).
+
+    instructions:
+      - "Create docs/openapi.yaml (OpenAPI 3.0 spec) with all endpoints:"
+      - |
+        Auth endpoints:
+        POST /api/auth/login — {email, password} → {access_token, refresh_token, expires_in}
+        POST /api/auth/refresh — {refresh_token} → {access_token, expires_in}
+      - |
+        Machine endpoints:
+        GET /api/machines — list all machines (paginated, filterable by status, location)
+        GET /api/machines/{id} — single machine with latest sensor readings
+        POST /api/machines — create machine (admin only)
+        PUT /api/machines/{id} — update machine (admin only)
+        DELETE /api/machines/{id} — decommission machine (admin only, soft delete)
+      - |
+        Sensor endpoints:
+        GET /api/machines/{id}/sensors — list sensors for a machine
+        POST /api/machines/{id}/sensors — register sensor (admin only)
+        PUT /api/sensors/{id} — update sensor metadata
+        DELETE /api/sensors/{id} — decommission sensor (admin only)
+        POST /api/sensors/{id}/config — push config to device
+      - |
+        Time-series endpoints:
+        GET /api/machines/{id}/vibration — query vibration data
+          Query params: start (ISO8601), end (ISO8601), interval (1s/1m/1h/1d), sensor_id (optional)
+          Response: {data: [{time, rms_accel_g, peak_accel_g, rms_velocity_mm_s, dominant_freq_hz}], meta: {count, interval}}
+        GET /api/machines/{id}/vibration/fft — FFT spectrum for a specific time window
+          Query params: time (ISO8601), sensor_id
+          Response: {frequencies: [float], magnitudes: [float]}
+      - |
+        Alert endpoints:
+        GET /api/alerts — list alerts (filterable by machine_id, severity, status, date range)
+        GET /api/alerts/{id} — single alert detail
+        POST /api/alerts/{id}/acknowledge — acknowledge alert (engineer+)
+        POST /api/alerts/{id}/resolve — resolve alert (engineer+)
+        PUT /api/alerts/{id}/notes — update alert notes
+      - |
+        User endpoints (admin only):
+        GET /api/users — list users
+        POST /api/users — create user
+        PUT /api/users/{id} — update user (role, name)
+        DELETE /api/users/{id} — deactivate user
+      - |
+        Device health endpoint:
+        GET /api/sensors/{id}/health — latest health metrics for a sensor
+      - |
+        WebSocket event format (ws://host/ws):
+        Events pushed to clients:
+        {type: "vibration", machine_id: "...", data: {...}}
+        {type: "alert", alert: {...}}
+        {type: "machine_status", machine_id: "...", status: "..."}
+        {type: "device_health", sensor_id: "...", data: {...}}
+      - "Define standard error response: {error: {code: string, message: string, details: object}}"
+      - "Define pagination: {data: [...], pagination: {page, per_page, total, total_pages}}"
+      - "Create response schema types/DTOs in codebase matching OpenAPI spec"
+
+    constraints:
+      - "All endpoints under /api/ prefix"
+      - "Authentication via Bearer token (JWT) in Authorization header"
+      - "Pagination: default 20 per page, max 100"
+      - "Time-series queries: max range 30 days, default 24 hours"
+      - "HTTP status codes: 200 (success), 201 (created), 204 (deleted), 400 (validation), 401 (unauthorized), 403 (forbidden), 404 (not found), 422 (unprocessable)"
+
+    acceptance_criteria:
+      - "OpenAPI spec validates with swagger-cli validate"
+      - "All endpoints documented with request/response schemas"
+      - "Error response format consistent across all endpoints"
+      - "DTO/schema types created in codebase"
+
+    dependencies:
+      hard:
+        - "L2-02: Data Models"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Complete OpenAPI spec at docs/openapi.yaml
+      - DTO/schema types for request validation and response serialization
+      - WebSocket event format specification
+      - Contract consumed by Layer 3 (Dashboard) for API integration
+
+    verification: "swagger-cli validate docs/openapi.yaml && make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-04: Authentication and RBAC
+  # ─────────────────────────────────────────────────
+  - title: "L2-04: Authentication and Role-Based Access Control"
+    purpose: "Implement JWT authentication and role-based endpoint authorization"
+    category: "SECURITY"
+
+    input_context: |
+      Users table exists (L2-02) with email, password_hash, role fields.
+      API contract (L2-03) defines auth endpoints and role requirements.
+
+    instructions:
+      - "Implement POST /api/auth/login: validate email/password against bcrypt hash, return JWT (access_token expires in 1h, refresh_token expires in 7d)"
+      - "Implement POST /api/auth/refresh: validate refresh token, issue new access token"
+      - "JWT payload: {sub: user_id, email: email, role: role, iat: timestamp, exp: timestamp}"
+      - "Create auth middleware: extract Bearer token, verify JWT signature, attach user context to request"
+      - "Create role middleware factory: require_role(min_role) — viewer < engineer < admin"
+      - "Apply role requirements: viewer (GET only), engineer (GET + acknowledge/resolve alerts + push config), admin (all operations)"
+      - "Hash passwords with bcrypt (cost factor 12)"
+      - "Create seed script: insert default admin user (admin@example.com / changeme)"
+      - "Add tests: login success, login failure, expired token rejection, role authorization"
+
+    constraints:
+      - "JWT secret from environment variable JWT_SECRET"
+      - "Access token TTL: 1 hour"
+      - "Refresh token TTL: 7 days"
+      - "bcrypt cost factor: 12"
+      - "Role hierarchy: viewer < engineer < admin (higher includes lower permissions)"
+      - "No session storage — stateless JWT only"
+
+    acceptance_criteria:
+      - "POST /api/auth/login with valid credentials returns tokens"
+      - "POST /api/auth/login with invalid credentials returns 401"
+      - "Request with expired token returns 401"
+      - "Viewer cannot POST to /api/machines (returns 403)"
+      - "Engineer can POST /api/alerts/{id}/acknowledge (returns 200)"
+      - "Admin can POST /api/users (returns 201)"
+      - "All auth tests pass"
+
+    dependencies:
+      hard:
+        - "L2-02: Data Models"
+      integrates_with:
+        - "L2-03: API Contract Definition"
+
+    handoff: |
+      Provides:
+      - Auth middleware for protecting all API endpoints
+      - Role middleware for endpoint-level authorization
+      - User context available in request handlers (user_id, role)
+      - JWT token format for frontend storage and refresh
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-05: MQTT Ingestion Service
+  # ─────────────────────────────────────────────────
+  - title: "L2-05: MQTT Ingestion Service"
+    purpose: "Subscribe to MQTT topics, validate messages, and write time-series data to TimescaleDB"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      MQTT broker running (L2-01 docker-compose).
+      MQTT schema defined (L1-04): topic hierarchy, payload formats.
+      TimescaleDB hypertables exist (L2-02): vibration_readings, device_health.
+      Machines and sensors tables exist for foreign key validation.
+
+    instructions:
+      - "Create src/ingestion/ module (or equivalent package)"
+      - "Implement MQTT subscriber connecting to broker, subscribing to: machines/+/vibration (QoS 0), machines/+/health (QoS 1), machines/+/alerts (QoS 1)"
+      - "Parse machine_id from topic string (wildcard match)"
+      - "Validate incoming JSON against expected schema: check required fields, type correctness, timestamp parsability"
+      - "On valid vibration message: INSERT INTO vibration_readings (time, machine_id, sensor_id, rms_accel_g, peak_accel_g, rms_velocity_mm_s, dominant_freq_hz) VALUES (...)"
+      - "On valid health message: INSERT INTO device_health (time, sensor_id, uptime_s, free_heap_bytes, wifi_rssi_dbm, battery_voltage_mv, firmware_version) VALUES (...), UPDATE sensors SET last_seen_at = NOW(), firmware_version = ... WHERE id = sensor_id"
+      - "On valid alert message: forward to anomaly detection engine (L2-06) for processing"
+      - "Batch inserts: accumulate up to 100 rows or 1 second, then batch INSERT for performance"
+      - "Log invalid messages with topic, payload snippet, and validation error (do not crash)"
+      - "Track ingestion metrics: messages_received, messages_valid, messages_invalid, inserts_per_second"
+      - "Add integration test: publish test MQTT message, verify row appears in TimescaleDB"
+
+    constraints:
+      - "Must handle 100+ messages/second sustained (fleet of 50 devices)"
+      - "Batch inserts for performance (not one-by-one)"
+      - "Invalid messages logged but never crash the service"
+      - "machine_id/sensor_id must reference existing records (log warning if not, still store data)"
+      - "MQTT subscriber must auto-reconnect on broker restart"
+
+    acceptance_criteria:
+      - "Vibration message published to MQTT appears in vibration_readings table"
+      - "Health message updates device_health table and sensors.last_seen_at"
+      - "Invalid JSON is logged and skipped (no crash)"
+      - "Batch insert handles 100 messages in < 1 second"
+      - "Service reconnects after broker restart"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-02: Data Models"
+        - "L1-04: MQTT Message Schema Definition"
+      integrates_with:
+        - "L2-06: Anomaly Detection Engine"
+
+    handoff: |
+      Provides:
+      - Continuous ingestion of vibration and health data into TimescaleDB
+      - sensors.last_seen_at updated for fleet monitoring
+      - Alert messages forwarded to anomaly detection pipeline
+      - Ingestion metrics for monitoring
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-06: Anomaly Detection Engine
+  # ─────────────────────────────────────────────────
+  - title: "L2-06: Anomaly Detection Engine"
+    purpose: "Analyze vibration data for anomalies using statistical methods and known failure patterns"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Ingestion service (L2-05) forwards incoming vibration data and edge alerts.
+      vibration_readings hypertable contains historical data for baseline calculation.
+
+    instructions:
+      - "Create src/anomaly/ module"
+      - "Implement moving baseline calculator: compute mean and stddev of RMS and peak over trailing 24-hour window per machine"
+      - "Implement z-score detector: flag readings where z-score > 3 (warning) or > 5 (critical) relative to baseline"
+      - "Implement pattern matchers for known failure modes:"
+      - "  - Bearing wear: elevated RMS with dominant frequency matching bearing defect frequency (BPFO/BPFI)"
+      - "  - Imbalance: dominant frequency equals 1x rotation speed with elevated amplitude"
+      - "  - Misalignment: elevated 2x rotation speed harmonic"
+      - "Implement severity classification: info (z > 2), warning (z > 3 or pattern match), critical (z > 5 or rapid degradation trend)"
+      - "Implement deduplication: suppress duplicate alerts for same machine + alert_type within 5 minutes"
+      - "Implement cooldown: after alert is acknowledged, suppress same type for configurable duration (default 1 hour)"
+      - "On anomaly detected: create alert record in alerts table, emit event for WebSocket and notification dispatch"
+      - "Update machine status: set machines.status based on worst active alert severity"
+      - "Add unit tests: verify z-score calculation, pattern matching on synthetic data, deduplication logic"
+
+    constraints:
+      - "Baseline window: 24 hours of data (require minimum 100 readings for valid baseline)"
+      - "New machines (< 100 readings): use fixed thresholds from device config, not statistical"
+      - "Deduplication window: 5 minutes"
+      - "Pattern matching is optional (graceful degradation if rotation speed unknown)"
+      - "Anomaly evaluation must complete in < 100ms per reading"
+
+    acceptance_criteria:
+      - "Z-score > 3 on synthetic data triggers warning alert"
+      - "Z-score > 5 triggers critical alert"
+      - "Duplicate alert within 5 minutes is suppressed"
+      - "Acknowledged alert type suppressed for cooldown period"
+      - "Machine status updates to 'critical' when critical alert is open"
+      - "Machine status returns to 'healthy' when all alerts resolved"
+      - "Unit tests pass"
+
+    dependencies:
+      hard:
+        - "L2-05: MQTT Ingestion Service"
+      integrates_with:
+        - "L2-07: Alert Management Service"
+
+    handoff: |
+      Provides:
+      - Anomaly detection pipeline processing every incoming vibration reading
+      - Alert records created in alerts table
+      - Machine status updated in machines table
+      - Events emitted for WebSocket push and notification dispatch
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-07: Alert Management Service
+  # ─────────────────────────────────────────────────
+  - title: "L2-07: Alert Management Service"
+    purpose: "Manage alert lifecycle and dispatch notifications via WebSocket, email, and SMS"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Anomaly detection (L2-06) creates alert records and emits events.
+      Auth middleware (L2-04) provides user context for acknowledgment.
+      API contract (L2-03) defines alert endpoints.
+      Alerts table (L2-02) with status lifecycle.
+
+    instructions:
+      - "Implement GET /api/alerts — list alerts with filters: machine_id, severity (info/warning/critical), status (open/acknowledged/resolved), date range (start/end). Paginated, sorted by detected_at DESC"
+      - "Implement GET /api/alerts/{id} — single alert with machine and sensor details (JOIN)"
+      - "Implement POST /api/alerts/{id}/acknowledge — set status='acknowledged', acknowledged_by=current_user, acknowledged_at=NOW(). Require role ≥ engineer"
+      - "Implement POST /api/alerts/{id}/resolve — set status='resolved', resolved_at=NOW(). Require role ≥ engineer. Recalculate machine status"
+      - "Implement PUT /api/alerts/{id}/notes — update notes field. Require role ≥ engineer"
+      - "On new critical alert: dispatch email notification to all engineers (configurable recipient list via env var ALERT_EMAIL_RECIPIENTS)"
+      - "On new critical alert: push WebSocket event {type: 'alert', alert: {...}} to all connected clients"
+      - "On status change: push WebSocket event {type: 'machine_status', machine_id: '...', status: '...'}"
+      - "Implement alert count endpoint: GET /api/machines/{id}/alerts/summary — {open: N, warning: N, critical: N}"
+      - "Add integration tests: create alert, acknowledge, resolve, verify status transitions"
+
+    constraints:
+      - "Status transitions: open → acknowledged → resolved (no skipping, no reverting)"
+      - "Only engineers and admins can acknowledge/resolve"
+      - "Email notifications are best-effort (log failure, don't retry infinitely)"
+      - "WebSocket push is fire-and-forget (client reconnection handles missed events)"
+
+    acceptance_criteria:
+      - "GET /api/alerts returns filtered, paginated list"
+      - "Acknowledging an open alert sets status, user, and timestamp"
+      - "Resolving updates machine status to 'healthy' if no other open alerts"
+      - "Attempting to resolve an open (non-acknowledged) alert returns 400"
+      - "WebSocket event emitted on new alert and status change"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-02: Data Models"
+        - "L2-04: Authentication and RBAC"
+        - "L2-06: Anomaly Detection Engine"
+      integrates_with:
+        - "L2-11: WebSocket Real-Time Events"
+
+    handoff: |
+      Provides:
+      - Alert CRUD API for dashboard consumption
+      - Alert lifecycle management (open → acknowledged → resolved)
+      - Notification dispatch (WebSocket + email)
+      - Alert summary counts for fleet overview
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-08: Time-Series Query API
+  # ─────────────────────────────────────────────────
+  - title: "L2-08: Time-Series Query API"
+    purpose: "Provide efficient time-series data retrieval with downsampling for dashboard charts"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      vibration_readings hypertable populated by ingestion (L2-05).
+      API contract (L2-03) defines time-series endpoints.
+      Auth middleware (L2-04) protects endpoints.
+      TimescaleDB continuous aggregates will be set up in L2-13.
+
+    instructions:
+      - "Implement GET /api/machines/{id}/vibration:"
+      - "  Parse query params: start (required), end (required), interval (1s/1m/1h/1d, default auto), sensor_id (optional)"
+      - "  Auto interval selection: range < 1h → 1s, < 24h → 1m, < 7d → 1h, < 30d → 1d"
+      - "  For 1s interval: query raw vibration_readings with WHERE time BETWEEN start AND end AND machine_id = id"
+      - "  For 1m/1h/1d: use TimescaleDB time_bucket(interval, time) with AVG(rms), MAX(peak), AVG(dominant_freq)"
+      - "  Response: {data: [{time, rms_accel_g, peak_accel_g, rms_velocity_mm_s, dominant_freq_hz}], meta: {count, interval, machine_id}}"
+      - "  Limit response to max 5000 data points (adjust interval if needed)"
+      - "Implement GET /api/machines/{id}/vibration/fft:"
+      - "  Query params: time (exact timestamp), sensor_id (required)"
+      - "  Return stored FFT data closest to requested time (if FFT storage is implemented)"
+      - "  Fallback: return empty if no FFT data available for that timestamp"
+      - "Add query performance index hints in SQL comments"
+      - "Add integration test: insert known data, query with different intervals, verify aggregation"
+
+    constraints:
+      - "Max query range: 30 days"
+      - "Max response data points: 5000 (to keep dashboard responsive)"
+      - "Use TimescaleDB time_bucket for aggregation (not application-level)"
+      - "Raw queries (1s) limited to 1-hour range"
+      - "All queries filtered by machine_id (no cross-machine queries for security)"
+
+    acceptance_criteria:
+      - "Query with 1-hour range returns raw data points"
+      - "Query with 24-hour range returns 1-minute aggregated data"
+      - "Response never exceeds 5000 data points"
+      - "Query for non-existent machine returns 404"
+      - "Unauthorized request returns 401"
+      - "Query performance < 500ms for 24-hour range"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-03: API Contract Definition"
+        - "L2-04: Authentication and RBAC"
+        - "L2-05: MQTT Ingestion Service"
+      integrates_with:
+        - "L2-13: TSDB Retention and Downsampling"
+
+    handoff: |
+      Provides:
+      - Time-series query API for dashboard chart rendering
+      - Automatic downsampling based on query range
+      - FFT spectrum retrieval endpoint
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-09: Machine and Sensor Management API
+  # ─────────────────────────────────────────────────
+  - title: "L2-09: Machine and Sensor Management API"
+    purpose: "CRUD operations for machines and sensors, including device registration"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Data models (L2-02): machines and sensors tables.
+      API contract (L2-03): machine and sensor endpoints.
+      Auth middleware (L2-04): role-based access.
+
+    instructions:
+      - "Implement GET /api/machines — list machines with pagination, filter by status and location, include latest_reading (most recent vibration_readings entry) and active_alert_count"
+      - "Implement GET /api/machines/{id} — single machine with sensors array and latest readings per sensor"
+      - "Implement POST /api/machines — create machine {name, location}. Admin only. Returns 201 with created machine"
+      - "Implement PUT /api/machines/{id} — update name, location. Admin only"
+      - "Implement DELETE /api/machines/{id} — soft delete (set deleted_at, don't remove data). Reject if active sensors exist. Admin only"
+      - "Implement GET /api/machines/{id}/sensors — list sensors for machine"
+      - "Implement POST /api/machines/{id}/sensors — register sensor {id (UUID from device), position, type}. Admin only"
+      - "Implement PUT /api/sensors/{id} — update position, type metadata"
+      - "Implement DELETE /api/sensors/{id} — soft delete. Admin only"
+      - "Implement auto-registration: if ingestion receives data from unknown sensor_id, create sensor record with machine_id from topic and position='unassigned'"
+      - "Add integration tests for all CRUD operations and role enforcement"
+
+    constraints:
+      - "Soft delete for machines and sensors (preserve historical data)"
+      - "Cannot delete machine with active (non-deleted) sensors"
+      - "Auto-registration creates sensor with position='unassigned' — admin must update"
+      - "Machine status computed from alerts, not manually settable"
+
+    acceptance_criteria:
+      - "CRUD operations work for machines and sensors"
+      - "GET /api/machines includes latest_reading and alert counts"
+      - "Delete machine with active sensors returns 400"
+      - "Viewer can GET but not POST/PUT/DELETE"
+      - "Auto-registration creates sensor on first data from unknown device"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-03: API Contract Definition"
+        - "L2-04: Authentication and RBAC"
+      integrates_with:
+        - "L2-05: MQTT Ingestion Service"
+
+    handoff: |
+      Provides:
+      - Machine and sensor CRUD API for dashboard and device management
+      - Machine list with status and alert counts for fleet overview
+      - Auto-registration for new devices
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-10: Device Configuration Push
+  # ─────────────────────────────────────────────────
+  - title: "L2-10: Device Configuration Push"
+    purpose: "Push configuration changes to ESP32 devices via MQTT from the API"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      MQTT client connected (L2-01).
+      MQTT config topic defined (L1-04): devices/{sensor_id}/config.
+      API contract (L2-03): POST /api/sensors/{id}/config.
+      Auth middleware (L2-04).
+
+    instructions:
+      - "Implement POST /api/sensors/{id}/config — accept config payload: {sampling_rate_hz, reporting_interval_s, threshold_rms_warning, threshold_rms_critical, threshold_peak_warning, threshold_peak_critical, include_fft}"
+      - "Validate config values: sampling_rate_hz in [100, 500, 1000], reporting_interval_s in [10, 300], thresholds > 0"
+      - "Increment config_version (stored in sensors table or separate config_versions table)"
+      - "Publish config JSON to MQTT topic devices/{sensor_id}/config (QoS 1, retain=true)"
+      - "Store config history: create device_configs table (sensor_id, config_version, config_json, pushed_at, pushed_by)"
+      - "Implement GET /api/sensors/{id}/config — return current config and version"
+      - "Implement POST /api/sensors/{id}/ota — accept {firmware_url, firmware_version, sha256}, publish to devices/{sensor_id}/ota (QoS 1). Admin only"
+      - "Add integration test: push config, verify MQTT publish, verify config stored in DB"
+
+    constraints:
+      - "Config publish uses QoS 1 and retain=true (device gets latest config on reconnect)"
+      - "Config version monotonically increasing per sensor"
+      - "OTA trigger is admin-only"
+      - "Config values must be validated before publishing"
+
+    acceptance_criteria:
+      - "POST /api/sensors/{id}/config publishes to correct MQTT topic"
+      - "Config version increments on each push"
+      - "Invalid config values return 400"
+      - "Config history stored in database"
+      - "OTA trigger publishes to correct topic with admin auth"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-03: API Contract Definition"
+        - "L2-04: Authentication and RBAC"
+        - "L1-04: MQTT Message Schema Definition"
+      integrates_with:
+        - "L1-08: Remote Configuration and OTA"
+
+    handoff: |
+      Provides:
+      - Config push API for dashboard device management (L3-07)
+      - OTA trigger API for firmware updates
+      - Config history for audit trail
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-11: WebSocket Real-Time Events
+  # ─────────────────────────────────────────────────
+  - title: "L2-11: WebSocket Real-Time Events"
+    purpose: "Push live vibration data, alerts, and status changes to dashboard clients via WebSocket"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Ingestion service (L2-05) receives vibration data.
+      Alert management (L2-07) emits alert events.
+      Auth middleware (L2-04) for WebSocket authentication.
+
+    instructions:
+      - "Implement WebSocket endpoint at /ws accepting JWT token as query parameter or first message"
+      - "Authenticate WebSocket connection: verify JWT, reject if invalid/expired"
+      - "Create event dispatcher: internal pub/sub that routes events to connected WebSocket clients"
+      - "Event types and payloads:"
+      - "  {type: 'vibration', machine_id: '...', data: {rms_accel_g, peak_accel_g, dominant_freq_hz, timestamp}}"
+      - "  {type: 'alert', alert: {id, machine_id, severity, alert_type, status, detected_at}}"
+      - "  {type: 'machine_status', machine_id: '...', status: 'healthy|warning|critical'}"
+      - "  {type: 'device_health', sensor_id: '...', data: {uptime_s, wifi_rssi_dbm, battery_voltage_mv}}"
+      - "Implement client subscription: clients can send {subscribe: ['machine:{id}', 'alerts', 'fleet']} to filter events"
+      - "Default subscription: 'fleet' (machine status changes) + 'alerts' (all alerts)"
+      - "Rate-limit vibration events to max 1 per second per machine per client (latest wins)"
+      - "Handle client disconnection gracefully (remove from subscriber list)"
+      - "Implement heartbeat ping/pong every 30 seconds"
+      - "Add integration test: connect WebSocket, subscribe, verify events received"
+
+    constraints:
+      - "JWT authentication required for WebSocket connection"
+      - "Max 100 concurrent WebSocket connections"
+      - "Vibration event rate limit: 1/second/machine/client"
+      - "Heartbeat interval: 30 seconds, timeout: 60 seconds"
+      - "Events are fire-and-forget (no guaranteed delivery over WebSocket)"
+
+    acceptance_criteria:
+      - "WebSocket connects with valid JWT"
+      - "WebSocket rejects invalid/missing JWT"
+      - "Vibration event received after ingestion writes data"
+      - "Alert event received when anomaly creates alert"
+      - "Client subscription filtering works (only subscribed events received)"
+      - "Disconnected clients cleaned up (no memory leak)"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-04: Authentication and RBAC"
+        - "L2-05: MQTT Ingestion Service"
+        - "L2-07: Alert Management Service"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - WebSocket endpoint at /ws for real-time dashboard updates
+      - Event subscription mechanism for client-side filtering
+      - Events consumed by L3-09 (Frontend WebSocket Integration)
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-12: User Management API
+  # ─────────────────────────────────────────────────
+  - title: "L2-12: User Management API"
+    purpose: "CRUD for user accounts and role management, admin-only"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Users table (L2-02) with email, password_hash, role.
+      API contract (L2-03) defines user endpoints.
+      Auth middleware (L2-04) with role enforcement.
+
+    instructions:
+      - "Implement GET /api/users — list users with pagination. Admin only. Exclude password_hash from response"
+      - "Implement POST /api/users — create user {email, name, password, role}. Admin only. Hash password with bcrypt. Return 201"
+      - "Implement PUT /api/users/{id} — update name, role. Admin only. Cannot change own role"
+      - "Implement DELETE /api/users/{id} — soft delete (set deactivated_at). Admin only. Cannot deactivate self"
+      - "Implement PUT /api/users/me/password — change own password {current_password, new_password}. Any authenticated user"
+      - "Email uniqueness constraint enforced at DB and API level"
+      - "Add integration tests: create user, update role, deactivate, password change"
+
+    constraints:
+      - "Admin only for user management (except password change)"
+      - "Cannot deactivate or change role of self"
+      - "Password never returned in any response"
+      - "Email must be unique (case-insensitive)"
+      - "Deactivated users cannot log in"
+
+    acceptance_criteria:
+      - "Admin creates user, user appears in list"
+      - "Non-admin gets 403 on user management endpoints"
+      - "Deactivated user cannot log in"
+      - "Admin cannot deactivate self"
+      - "Password change requires correct current password"
+      - "Integration tests pass"
+
+    dependencies:
+      hard:
+        - "L2-03: API Contract Definition"
+        - "L2-04: Authentication and RBAC"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - User management API for admin dashboard (L3-08)
+      - User lifecycle: create, update role, deactivate
+
+    verification: "make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-13: TSDB Retention and Downsampling
+  # ─────────────────────────────────────────────────
+  - title: "L2-13: TSDB Retention and Downsampling Policies"
+    purpose: "Configure TimescaleDB continuous aggregates and retention for long-term storage efficiency"
+    category: "OPERATIONS"
+
+    input_context: |
+      vibration_readings and device_health hypertables exist (L2-02).
+      Ingestion service (L2-05) writes data continuously.
+
+    instructions:
+      - "Create continuous aggregate: vibration_readings_1m — time_bucket('1 minute'), AVG(rms_accel_g), MAX(peak_accel_g), AVG(rms_velocity_mm_s), AVG(dominant_freq_hz), COUNT(*) as sample_count, grouped by machine_id, sensor_id"
+      - "Create continuous aggregate: vibration_readings_1h — time_bucket('1 hour'), same aggregates, from vibration_readings_1m (hierarchical)"
+      - "Create continuous aggregate: vibration_readings_1d — time_bucket('1 day'), from vibration_readings_1h"
+      - "Set refresh policies: 1m aggregate refreshes every 1 minute (lag 5 minutes), 1h every 1 hour (lag 1 hour), 1d every 1 day (lag 2 hours)"
+      - "Set retention policies: raw data → 30 days, 1m aggregate → 1 year, 1h aggregate → 5 years, 1d aggregate → forever"
+      - "Set retention for device_health: raw → 90 days"
+      - "Create migration scripts for all continuous aggregates and policies"
+      - "Document storage estimates in docs/capacity.md: estimated GB/year for 50 machines, 100 machines, 500 machines"
+      - "Verify: insert test data spanning 2 days, confirm aggregates populate"
+
+    constraints:
+      - "Use TimescaleDB continuous aggregates (not materialized views)"
+      - "Hierarchical aggregation: 1h reads from 1m, not raw (performance)"
+      - "Retention policies automated via TimescaleDB add_retention_policy"
+      - "Real-time aggregation enabled (WITH (timescaledb.materialized_only = false))"
+
+    acceptance_criteria:
+      - "Continuous aggregates created and refreshing on schedule"
+      - "1-minute aggregate has correct values for known test data"
+      - "Retention policy drops raw data older than 30 days"
+      - "Time-series query API (L2-08) can query from aggregates"
+      - "Capacity estimates documented"
+
+    dependencies:
+      hard:
+        - "L2-05: MQTT Ingestion Service"
+      integrates_with:
+        - "L2-08: Time-Series Query API"
+
+    handoff: |
+      Provides:
+      - Continuous aggregates for efficient long-range queries
+      - Automated retention policies for storage management
+      - Capacity planning documentation
+
+    verification: "make migrate && make test"
+
+
+  # ─────────────────────────────────────────────────
+  # L2-14: Deployment Pipeline
+  # ─────────────────────────────────────────────────
+  - title: "L2-14: Backend Deployment Pipeline"
+    purpose: "Dockerize the backend and set up CI/CD, health checks, and structured logging"
+    category: "OPERATIONS"
+
+    input_context: |
+      Backend project bootstrapped (L2-01) with docker-compose for dev.
+
+    instructions:
+      - "Create Dockerfile: multi-stage build (builder + runtime), non-root user, expose port 8000"
+      - "Create .dockerignore: exclude tests/, docs/, .env, __pycache__/, node_modules/"
+      - "Add health check to Dockerfile: HEALTHCHECK CMD curl -f http://localhost:8000/api/health"
+      - "Create docker-compose.prod.yaml: production overrides (no volume mounts, resource limits, restart policies)"
+      - "Implement structured JSON logging: {timestamp, level, message, correlation_id, service, extra}"
+      - "Add correlation_id middleware: generate UUID per request, include in all log entries and response header X-Correlation-ID"
+      - "Add request logging middleware: log method, path, status_code, duration_ms for every request"
+      - "Create CI pipeline config (.github/workflows/ci.yaml or equivalent): lint, test, build Docker image"
+      - "Add readiness probe endpoint: GET /api/ready — checks DB connection and MQTT connection"
+      - "Create .env.example with all required env vars documented"
+
+    constraints:
+      - "Docker image size < 200MB"
+      - "Non-root user in container"
+      - "No secrets in Docker image (all via environment variables)"
+      - "CI must run tests before building image"
+
+    acceptance_criteria:
+      - "Docker image builds successfully"
+      - "Container starts and health check passes"
+      - "Structured JSON logs output to stdout"
+      - "Correlation ID present in logs and response headers"
+      - "CI pipeline runs lint + test + build"
+
+    dependencies:
+      hard:
+        - "L2-01: Backend Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Production-ready Docker image
+      - CI/CD pipeline
+      - Structured logging with correlation IDs
+      - Health and readiness probes for orchestrator
+
+    verification: "docker build -t backend . && docker run --rm backend /api/health"
+
+
+  # ══════════════════════════════════════════════════════════════════
+  #  LAYER 3: WEB DASHBOARD
+  # ══════════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────
+  # L3-01: Frontend Project Bootstrap
+  # ─────────────────────────────────────────────────
+  - title: "L3-01: Frontend Project Bootstrap"
+    purpose: "Initialize React dashboard project with build tooling, routing, and core dependencies"
+    category: "OPERATIONS"
+
+    input_context: |
+      Starting from scratch for the frontend layer.
+      Stack: React 18+ with TypeScript, Vite, TailwindCSS.
+      Charts: ECharts (via echarts-for-react) or Recharts.
+      State: React Query (TanStack Query) for server state, Zustand for client state.
+
+    instructions:
+      - "Create dashboard/ directory, initialize with Vite React-TS template"
+      - "Install dependencies: react-router-dom, @tanstack/react-query, zustand, tailwindcss, axios, echarts + echarts-for-react, date-fns"
+      - "Configure TailwindCSS with custom colors for status: healthy (#22c55e), warning (#f59e0b), critical (#ef4444)"
+      - "Set up project structure: src/pages/, src/components/, src/hooks/, src/api/, src/stores/, src/types/"
+      - "Create src/api/client.ts: axios instance with baseURL from env var VITE_API_URL, JWT interceptor (attach token from localStorage), 401 interceptor (redirect to login)"
+      - "Create src/types/index.ts with TypeScript interfaces matching backend DTOs: Machine, Sensor, Alert, User, VibrationReading, DeviceHealth"
+      - "Set up react-router with routes: /login, /dashboard, /machines/:id, /alerts, /devices, /users (admin)"
+      - "Create placeholder pages for each route"
+      - "Set up React Query provider with default staleTime: 30s"
+      - "Verify: npm run dev serves the app, all routes navigate correctly"
+
+    constraints:
+      - "TypeScript strict mode enabled"
+      - "All API types must match backend DTOs exactly"
+      - "Environment variables via VITE_ prefix"
+      - "No CSS-in-JS — TailwindCSS utility classes only"
+
+    acceptance_criteria:
+      - "npm run dev starts dev server without errors"
+      - "All routes render placeholder content"
+      - "Axios client configured with interceptors"
+      - "TypeScript types compile without errors"
+      - "npm run build produces production bundle"
+
+    dependencies:
+      hard: []
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - React project with routing, API client, types, and state management
+      - Component structure for page development
+      - Build tooling (Vite) ready for development
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-02: UI Component Library and Layout
+  # ─────────────────────────────────────────────────
+  - title: "L3-02: UI Component Library and Layout"
+    purpose: "Create shared UI components and the application shell layout"
+    category: "DESIGN"
+
+    input_context: |
+      Frontend bootstrapped (L3-01): TailwindCSS, routing, types.
+
+    instructions:
+      - "Create src/components/layout/AppShell.tsx: sidebar navigation + header + main content area"
+      - "Sidebar items: Dashboard (fleet overview), Alerts, Devices, Users (admin only)"
+      - "Header: app title, current user name and role, logout button"
+      - "Create src/components/ui/StatusBadge.tsx: colored badge for machine status (healthy/warning/critical) and alert severity"
+      - "Create src/components/ui/SeverityIcon.tsx: icons for info/warning/critical"
+      - "Create src/components/ui/DataTable.tsx: generic sortable, paginated table component with loading and empty states"
+      - "Create src/components/ui/TimeRangeSelector.tsx: predefined ranges (1h, 6h, 24h, 7d, 30d) + custom date picker"
+      - "Create src/components/ui/LoadingSpinner.tsx and ErrorMessage.tsx"
+      - "Create src/components/ui/Card.tsx: container with title, optional subtitle, and content area"
+      - "Create src/components/ui/ConfirmDialog.tsx: modal confirmation for destructive actions"
+      - "Ensure responsive: sidebar collapses to hamburger menu on tablets"
+      - "Verify: all components render correctly in Storybook or test page"
+
+    constraints:
+      - "TailwindCSS utility classes only (no custom CSS files)"
+      - "Components must be composable and reusable"
+      - "Dark mode support via Tailwind dark: variant (optional, wire up later)"
+      - "Accessible: proper aria labels, keyboard navigation"
+
+    acceptance_criteria:
+      - "AppShell renders with sidebar and header"
+      - "StatusBadge displays correct colors for each status"
+      - "DataTable handles pagination, sorting, loading, and empty states"
+      - "TimeRangeSelector returns start/end dates"
+      - "Responsive layout works at 768px and 1024px breakpoints"
+
+    dependencies:
+      hard:
+        - "L3-01: Frontend Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - AppShell layout wrapping all authenticated pages
+      - Reusable UI components for all dashboard pages
+      - StatusBadge and SeverityIcon for consistent status display
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-03: Authentication Flow
+  # ─────────────────────────────────────────────────
+  - title: "L3-03: Authentication Flow"
+    purpose: "Implement login page, JWT management, and route protection"
+    category: "SECURITY"
+
+    input_context: |
+      Frontend bootstrapped (L3-01): axios client with interceptors, routing.
+      Backend auth API (L2-04): POST /api/auth/login, POST /api/auth/refresh.
+
+    instructions:
+      - "Create src/stores/authStore.ts (Zustand): state {user, accessToken, refreshToken, isAuthenticated}, actions {login, logout, refreshToken}"
+      - "Create src/pages/LoginPage.tsx: email/password form, error display, redirect to /dashboard on success"
+      - "Store tokens in localStorage: access_token, refresh_token"
+      - "Implement axios request interceptor: attach Authorization: Bearer {token} to all API requests"
+      - "Implement axios response interceptor: on 401, attempt token refresh; if refresh fails, redirect to /login"
+      - "Create src/components/auth/ProtectedRoute.tsx: redirect to /login if not authenticated"
+      - "Create src/components/auth/RoleGuard.tsx: render children only if user role meets minimum requirement"
+      - "Wrap all routes except /login with ProtectedRoute"
+      - "Wrap /users route with RoleGuard(admin)"
+      - "On app load: check for stored token, validate by calling GET /api/users/me (or similar), restore session"
+      - "Add logout: clear tokens from localStorage, redirect to /login"
+
+    constraints:
+      - "Tokens in localStorage (acceptable for internal tool — not public-facing)"
+      - "Token refresh happens transparently (user doesn't see it)"
+      - "Failed refresh = force logout (no infinite retry)"
+      - "Role information from JWT payload (decoded client-side for UI, verified server-side for API)"
+
+    acceptance_criteria:
+      - "Login with valid credentials navigates to /dashboard"
+      - "Login with invalid credentials shows error message"
+      - "Unauthenticated access to /dashboard redirects to /login"
+      - "Expired token triggers automatic refresh"
+      - "Failed refresh redirects to /login"
+      - "Admin-only pages hidden from non-admin users"
+
+    dependencies:
+      hard:
+        - "L3-01: Frontend Project Bootstrap"
+        - "L2-04: Authentication and RBAC"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Auth state management for all pages
+      - ProtectedRoute and RoleGuard for route protection
+      - Automatic token management in API client
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-04: Machine Fleet Overview Page
+  # ─────────────────────────────────────────────────
+  - title: "L3-04: Machine Fleet Overview Page"
+    purpose: "Display all machines with real-time status, latest readings, and alert counts"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      UI components (L3-02): AppShell, StatusBadge, DataTable, Card.
+      Auth flow (L3-03): ProtectedRoute, auth state.
+      Backend API (L2-09): GET /api/machines.
+
+    instructions:
+      - "Create src/pages/DashboardPage.tsx as the fleet overview"
+      - "Fetch machines list from GET /api/machines using React Query (useQuery)"
+      - "Display summary cards at top: total machines, healthy count, warning count, critical count"
+      - "Display machine grid (card view) or table (list view) — toggle between views"
+      - "Each machine card shows: name, location, StatusBadge, last reading time (relative, e.g., '2m ago'), active alert count with severity breakdown"
+      - "Click on machine card navigates to /machines/{id}"
+      - "Add filter bar: filter by status (all/healthy/warning/critical), search by name or location"
+      - "Auto-refresh: React Query refetch every 30 seconds"
+      - "Update machine status in real-time via WebSocket events (if L3-09 is integrated)"
+      - "Show loading skeleton while data is fetching"
+      - "Show empty state if no machines registered"
+
+    constraints:
+      - "Must handle 500+ machines without performance issues (virtualize if needed)"
+      - "Last reading time updates every minute (client-side relative time)"
+      - "Filter and search are client-side (full list fetched)"
+
+    acceptance_criteria:
+      - "Page displays all machines with correct status badges"
+      - "Summary cards show accurate counts"
+      - "Clicking machine navigates to detail page"
+      - "Filter by status works correctly"
+      - "Search filters by name and location"
+      - "Auto-refresh updates data every 30s"
+      - "Loading and empty states render correctly"
+
+    dependencies:
+      hard:
+        - "L3-02: UI Component Library"
+        - "L3-03: Authentication Flow"
+        - "L2-09: Machine and Sensor Management API"
+      integrates_with:
+        - "L3-09: Real-Time WebSocket Integration"
+
+    handoff: |
+      Provides:
+      - Fleet overview page as the main dashboard landing page
+      - Navigation entry point to machine detail views
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-05: Machine Detail View with Vibration Charts
+  # ─────────────────────────────────────────────────
+  - title: "L3-05: Machine Detail View with Vibration Charts"
+    purpose: "Display time-series vibration charts and FFT spectrum for a selected machine"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      UI components (L3-02): TimeRangeSelector, Card.
+      Backend API (L2-08): GET /api/machines/{id}/vibration, GET /api/machines/{id}/vibration/fft.
+      WebSocket (L2-11): real-time vibration events.
+
+    instructions:
+      - "Create src/pages/MachineDetailPage.tsx with route /machines/:id"
+      - "Fetch machine details from GET /api/machines/{id}"
+      - "Display machine header: name, location, status badge, sensor list with selector"
+      - "Create src/components/charts/VibrationChart.tsx using ECharts: multi-series line chart with RMS (primary), Peak (secondary), Dominant Frequency (tertiary axis)"
+      - "Integrate TimeRangeSelector: on range change, fetch from GET /api/machines/{id}/vibration?start=...&end=...&sensor_id=..."
+      - "Chart features: zoom (mouse wheel), pan (drag), tooltip with exact values, anomaly markers (vertical lines at alert timestamps)"
+      - "Create src/components/charts/FFTChart.tsx: bar chart showing frequency vs. magnitude. Triggered by clicking a point on the vibration chart"
+      - "Overlay anomaly markers: fetch alerts for this machine in the visible time range, draw vertical dashed lines at alert timestamps, color-coded by severity"
+      - "Real-time mode: when time range ends at 'now', append incoming WebSocket vibration events to the chart (sliding window)"
+      - "Add sensor selector dropdown if machine has multiple sensors"
+      - "Show loading state while chart data is fetching"
+      - "Show 'No data' state for machines with no readings"
+
+    constraints:
+      - "ECharts must handle 5000 data points without lag"
+      - "FFT chart loads on demand (not automatically for every point)"
+      - "Real-time mode limited to last 1 hour (auto-downgrade to 1m interval for longer ranges)"
+      - "Chart must be responsive (resize on window change)"
+
+    acceptance_criteria:
+      - "Vibration chart renders with correct data for selected time range"
+      - "Time range selector changes query and updates chart"
+      - "Anomaly markers appear at correct timestamps"
+      - "FFT chart renders when a point is clicked"
+      - "Real-time data appends to chart in real-time mode"
+      - "Sensor selector filters data correctly"
+      - "Chart zooms and pans smoothly"
+
+    dependencies:
+      hard:
+        - "L3-02: UI Component Library"
+        - "L3-03: Authentication Flow"
+        - "L2-08: Time-Series Query API"
+        - "L2-11: WebSocket Real-Time Events"
+      integrates_with:
+        - "L3-06: Alert Dashboard"
+
+    handoff: |
+      Provides:
+      - Machine detail page with interactive vibration charts
+      - FFT spectrum viewer
+      - Real-time data overlay
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-06: Alert Dashboard and Management
+  # ─────────────────────────────────────────────────
+  - title: "L3-06: Alert Dashboard and Management"
+    purpose: "Display, filter, acknowledge, and resolve alerts with real-time updates"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      UI components (L3-02): DataTable, StatusBadge, SeverityIcon, ConfirmDialog.
+      Backend API (L2-07): alert CRUD endpoints.
+      WebSocket (L2-11): alert events.
+
+    instructions:
+      - "Create src/pages/AlertsPage.tsx with route /alerts"
+      - "Fetch alerts from GET /api/alerts using React Query with filters"
+      - "Display alert table with columns: Severity (icon), Machine Name, Alert Type, Status, Detected At (relative time), Acknowledged By"
+      - "Add filter tabs: All, Open, Acknowledged, Resolved"
+      - "Add filter dropdowns: severity (info/warning/critical), machine, date range"
+      - "Row click opens alert detail panel (slide-in or modal): full details, machine link, acknowledge/resolve buttons, notes field"
+      - "Acknowledge button: POST /api/alerts/{id}/acknowledge, update UI optimistically"
+      - "Resolve button: POST /api/alerts/{id}/resolve with confirmation dialog, update UI"
+      - "Notes field: PUT /api/alerts/{id}/notes on blur (auto-save)"
+      - "Real-time: new alerts from WebSocket appear at top of list with highlight animation"
+      - "Sound notification for critical alerts (optional, toggleable)"
+      - "Badge in sidebar navigation showing open alert count"
+      - "Add integration with machine detail: clicking machine name navigates to /machines/{id}"
+
+    constraints:
+      - "Acknowledge requires engineer or admin role"
+      - "Resolve requires prior acknowledgment (button disabled for open alerts)"
+      - "Optimistic updates with rollback on API failure"
+      - "Sound notification off by default (user preference in localStorage)"
+
+    acceptance_criteria:
+      - "Alert list displays with correct severity icons and status"
+      - "Filter tabs show correct counts and filtered results"
+      - "Acknowledge updates alert status to acknowledged"
+      - "Resolve updates alert and machine status"
+      - "Notes auto-save on blur"
+      - "New WebSocket alert appears at top of list"
+      - "Sidebar badge shows open alert count"
+
+    dependencies:
+      hard:
+        - "L3-02: UI Component Library"
+        - "L3-03: Authentication Flow"
+        - "L2-07: Alert Management Service"
+      integrates_with:
+        - "L3-09: Real-Time WebSocket Integration"
+        - "L3-05: Machine Detail View"
+
+    handoff: |
+      Provides:
+      - Alert management page for engineers
+      - Real-time alert notifications
+      - Sidebar alert count badge
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-07: Device Management Page
+  # ─────────────────────────────────────────────────
+  - title: "L3-07: Device Management Page"
+    purpose: "Manage sensor devices: view status, update config, trigger OTA"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      UI components (L3-02): DataTable, Card, ConfirmDialog.
+      Backend APIs: GET /api/machines/{id}/sensors (L2-09), POST /api/sensors/{id}/config (L2-10), GET /api/sensors/{id}/health.
+
+    instructions:
+      - "Create src/pages/DevicesPage.tsx with route /devices"
+      - "Fetch all sensors (across all machines) with React Query"
+      - "Display device table: Sensor ID (short), Machine Name, Position, Firmware Version, Last Seen (relative), WiFi RSSI (signal bars icon), Battery (percentage bar), Status"
+      - "Status derived from last_seen_at: online (< 5 min), stale (5-30 min), offline (> 30 min)"
+      - "Row click opens device detail panel:"
+      - "  - Health metrics chart: RSSI and battery over last 24h (from GET /api/sensors/{id}/health time-series)"
+      - "  - Config editor: form with sampling_rate_hz (dropdown), reporting_interval_s (input), threshold fields (inputs)"
+      - "  - 'Push Config' button: POST /api/sensors/{id}/config with confirmation"
+      - "  - 'Trigger OTA' button (admin only): form for firmware_url, version, sha256. POST /api/sensors/{id}/ota with confirmation"
+      - "  - Config history: list of previous config pushes with timestamps and who pushed"
+      - "Add filter: by machine, by status (online/stale/offline)"
+      - "Add bulk actions: select multiple devices, push same config to all (admin only)"
+
+    constraints:
+      - "OTA trigger is admin-only (RoleGuard)"
+      - "Config push requires confirmation dialog"
+      - "Bulk config push limited to 20 devices at a time"
+      - "Device status computed client-side from last_seen_at"
+
+    acceptance_criteria:
+      - "Device table shows all sensors with correct status"
+      - "Config editor loads current config values"
+      - "Config push sends correct payload and shows success/error"
+      - "OTA trigger only visible to admin users"
+      - "Health chart renders RSSI and battery history"
+      - "Filter by machine and status works"
+
+    dependencies:
+      hard:
+        - "L3-02: UI Component Library"
+        - "L3-03: Authentication Flow"
+        - "L2-09: Machine and Sensor Management API"
+        - "L2-10: Device Configuration Push"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Device fleet management page for admins
+      - Config push and OTA trigger UI
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-08: User Administration Page
+  # ─────────────────────────────────────────────────
+  - title: "L3-08: User Administration Page"
+    purpose: "Admin page for managing user accounts and roles"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      UI components (L3-02): DataTable, ConfirmDialog.
+      Backend API (L2-12): user CRUD endpoints.
+      Auth (L3-03): RoleGuard for admin-only access.
+
+    instructions:
+      - "Create src/pages/UsersPage.tsx with route /users (wrapped in RoleGuard admin)"
+      - "Fetch users from GET /api/users with React Query"
+      - "Display user table: Name, Email, Role (badge), Created At, Status (active/deactivated)"
+      - "Add 'Create User' button opening modal: name, email, password, role (dropdown) fields"
+      - "Row click opens edit panel: update name, change role (dropdown), deactivate button"
+      - "Deactivate shows confirmation dialog, calls DELETE /api/users/{id}"
+      - "Role dropdown: viewer, engineer, admin"
+      - "Show 'You' badge next to current user's row"
+      - "Disable role change and deactivate button for current user's row"
+
+    constraints:
+      - "Entire page admin-only"
+      - "Cannot modify or deactivate own account"
+      - "Password only set on creation (admin resets via separate flow or direct DB)"
+      - "Deactivated users shown with visual distinction (greyed out)"
+
+    acceptance_criteria:
+      - "Non-admin users cannot access /users (redirected)"
+      - "User list displays with correct roles and status"
+      - "Create user form validates and creates user"
+      - "Role change updates immediately"
+      - "Deactivate confirmation prevents accidental action"
+      - "Current user's row has disabled actions"
+
+    dependencies:
+      hard:
+        - "L3-02: UI Component Library"
+        - "L3-03: Authentication Flow"
+        - "L2-12: User Management API"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - User administration page for managing team access
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-09: Real-Time WebSocket Integration
+  # ─────────────────────────────────────────────────
+  - title: "L3-09: Real-Time WebSocket Integration"
+    purpose: "Connect to backend WebSocket, manage subscriptions, and distribute events to UI components"
+    category: "CONSTRUCTION"
+
+    input_context: |
+      Frontend bootstrapped (L3-01).
+      Backend WebSocket (L2-11) at /ws with JWT auth and subscription model.
+
+    instructions:
+      - "Create src/hooks/useWebSocket.ts: custom hook managing WebSocket connection lifecycle"
+      - "Connect to ws://{VITE_API_URL}/ws?token={accessToken} on app mount (after authentication)"
+      - "Implement auto-reconnect with exponential backoff: 1s, 2s, 4s, 8s, max 30s"
+      - "Send subscription message on connect: {subscribe: ['fleet', 'alerts']}"
+      - "Create src/stores/realtimeStore.ts (Zustand): store latest events by type, expose selectors"
+      - "Distribute events to React Query cache: on 'vibration' event, update relevant query cache; on 'machine_status' event, update machines query cache; on 'alert' event, invalidate alerts query"
+      - "Create src/hooks/useRealtimeVibration.ts: hook returning latest vibration data for a specific machine_id"
+      - "Create src/hooks/useRealtimeAlerts.ts: hook returning new alerts since page load"
+      - "Implement browser notification for critical alerts: request Notification permission, show native notification with machine name and alert type"
+      - "Show connection status indicator in AppShell header: green dot (connected), yellow (reconnecting), red (disconnected)"
+      - "Disconnect WebSocket on logout"
+
+    constraints:
+      - "Single WebSocket connection per client (not per component)"
+      - "Reconnect backoff resets on successful connection"
+      - "Browser notifications require user permission (graceful degradation if denied)"
+      - "WebSocket events update React Query cache for consistency (not separate state)"
+
+    acceptance_criteria:
+      - "WebSocket connects on login and disconnects on logout"
+      - "Connection status indicator reflects actual state"
+      - "Vibration events update machine detail chart in real-time"
+      - "Alert events appear in alert list without manual refresh"
+      - "Machine status changes update fleet overview badges"
+      - "Auto-reconnect works after simulated disconnection"
+      - "Browser notification appears for critical alert (if permitted)"
+
+    dependencies:
+      hard:
+        - "L3-01: Frontend Project Bootstrap"
+        - "L2-11: WebSocket Real-Time Events"
+      integrates_with:
+        - "L3-04: Machine Fleet Overview"
+        - "L3-05: Machine Detail View"
+        - "L3-06: Alert Dashboard"
+
+    handoff: |
+      Provides:
+      - WebSocket connection management for entire application
+      - Real-time hooks for components to consume live data
+      - Browser notifications for critical alerts
+
+    verification: "cd dashboard && npm run build && npm run lint"
+
+
+  # ─────────────────────────────────────────────────
+  # L3-10: Frontend Build and Deployment
+  # ─────────────────────────────────────────────────
+  - title: "L3-10: Frontend Build and Deployment"
+    purpose: "Production build configuration, static hosting setup, and CI pipeline"
+    category: "OPERATIONS"
+
+    input_context: |
+      Frontend project (L3-01) with Vite build system.
+
+    instructions:
+      - "Configure Vite production build: code splitting per route (lazy loading), asset hashing for cache busting, source maps (separate files, not inline)"
+      - "Create Dockerfile for frontend: nginx:alpine serving static files, gzip enabled, SPA fallback (try_files $uri /index.html)"
+      - "Create nginx.conf: gzip on, cache-control headers (assets: 1 year, index.html: no-cache), security headers (X-Frame-Options, CSP)"
+      - "Create environment injection script: replace VITE_ placeholders at container startup from env vars (for runtime config without rebuild)"
+      - "Create CI pipeline step: lint, type-check, build, optional e2e tests"
+      - "Optimize bundle: analyze bundle size with rollup-plugin-visualizer, ensure no vendor chunk > 500KB"
+      - "Add PWA manifest for optional installability on control room displays"
+
+    constraints:
+      - "Production bundle total < 2MB (gzipped)"
+      - "No individual chunk > 500KB"
+      - "index.html must never be cached (no-cache, no-store)"
+      - "Environment variables injected at runtime (not bake-time)"
+
+    acceptance_criteria:
+      - "npm run build produces optimized output"
+      - "Docker image serves app correctly"
+      - "SPA routing works (direct URL to /machines/123 works)"
+      - "Gzip enabled (verify with curl -H 'Accept-Encoding: gzip')"
+      - "Environment variables configurable without rebuild"
+      - "Bundle size within limits"
+
+    dependencies:
+      hard:
+        - "L3-01: Frontend Project Bootstrap"
+      integrates_with: []
+
+    handoff: |
+      Provides:
+      - Production-ready frontend Docker image
+      - CI pipeline for frontend
+      - Deployment configuration for static hosting
+
+    verification: "cd dashboard && npm run build && docker build -t dashboard ."

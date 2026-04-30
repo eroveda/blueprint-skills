@@ -1,20 +1,19 @@
 {
   "name": "blueprint-skills",
-  "version": "0.1.0",
   "description": "Domain decomposition + professional documentation skills for Claude Code, aligned with IEEE SWEBOK v4.0",
-  "author": "eroveda",
-  "license": "MIT",
+  "version": "0.1.0",
+  "author": {
+    "name": "eroveda"
+  },
   "homepage": "https://github.com/eroveda/blueprint-skills",
   "repository": "https://github.com/eroveda/blueprint-skills",
+  "license": "MIT",
   "keywords": [
     "claude-code",
     "skills",
     "swebok",
     "ieee",
     "documentation",
-    "software-engineering",
-    "code-generation",
-    "specification"
-  ],
-  "skills": "./skills"
+    "software-engineering"
+  ]
 }
