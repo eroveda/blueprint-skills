@@ -1,4 +1,5 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "blueprint-skills",
   "description": "Blueprint Skills — domain decomposition + IEEE SWEBOK documentation skills for Claude Code",
   "owner": {
@@ -8,12 +9,9 @@
   "plugins": [
     {
       "name": "blueprint-skills",
-      "description": "7 skills for SWEBOK-aligned project decomposition and IEEE 15289 documentation generation. Validated on multi-layer IoT system (5,365 lines of professional documentation generated from a 3-sentence prompt).",
+      "description": "7 skills for SWEBOK-aligned project decomposition and IEEE 15289 documentation generation. Validated on multi-layer IoT system (5,367 lines of professional documentation generated from a 3-sentence prompt).",
       "version": "0.1.0",
-      "source": {
-        "source": "github",
-        "repo": "eroveda/blueprint-skills"
-      },
+      "source": "https://github.com/eroveda/blueprint-skills.git",
       "category": "documentation",
       "keywords": [
         "swebok",
