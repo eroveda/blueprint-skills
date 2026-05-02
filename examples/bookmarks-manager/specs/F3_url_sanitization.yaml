@@ -1,0 +1,56 @@
+title: "URL Display Sanitization"
+purpose: "Implement a utility that sanitizes URLs before rendering in anchor tags to prevent XSS via javascript: or other dangerous schemes, and perform client-side file type validation before upload."
+category: "SECURITY"
+
+input_context: |
+  F2 completed:
+  - src/types/index.ts — Bookmark type
+  - src/api/client.ts — axios instance
+  - src/utils/ directory exists
+
+instructions:
+  - "Create src/utils/sanitizeUrl.ts:"
+  - "  export function sanitizeUrl(url: string): string — parse with new URL(url); if protocol is not 'http:' or 'https:', return 'about:blank'; otherwise return url. Wrap in try/catch — malformed URLs also return 'about:blank'."
+  - "  export function isSafeUrl(url: string): boolean — returns true only if sanitizeUrl(url) !== 'about:blank'."
+  - "Create src/utils/validateFile.ts:"
+  - "  export function validateBookmarkFile(file: File): { valid: boolean; error?: string } — checks: file.name ends with .html or .json; file.size <= 10 * 1024 * 1024 (10MB); returns { valid: false, error: '...' } on failure, { valid: true } on success."
+  - "Write unit tests in src/utils/sanitizeUrl.test.ts:"
+  - "  sanitizeUrl('https://example.com') → 'https://example.com'"
+  - "  sanitizeUrl('http://example.com') → 'http://example.com'"
+  - "  sanitizeUrl('javascript:alert(1)') → 'about:blank'"
+  - "  sanitizeUrl('data:text/html,<h1>hi</h1>') → 'about:blank'"
+  - "  sanitizeUrl('vbscript:msgbox(1)') → 'about:blank'"
+  - "  sanitizeUrl('not-a-url') → 'about:blank'"
+  - "  sanitizeUrl('') → 'about:blank'"
+  - "Write unit tests in src/utils/validateFile.test.ts:"
+  - "  .html file under 10MB → { valid: true }"
+  - "  .json file under 10MB → { valid: true }"
+  - "  .exe file → { valid: false, error: '...' }"
+  - "  .html file over 10MB → { valid: false, error: '...' }"
+
+constraints:
+  - "sanitizeUrl must never throw — always return a string."
+  - "The only allowed protocols are http: and https: — all others map to about:blank."
+  - "validateBookmarkFile checks both extension and size — both must pass."
+  - "10MB limit must match MAX_UPLOAD_SIZE configured on the backend."
+  - "These utilities have no React dependencies — pure TypeScript functions."
+
+acceptance_criteria:
+  - "sanitizeUrl('javascript:alert(1)') returns 'about:blank'."
+  - "sanitizeUrl('https://example.com') returns 'https://example.com'."
+  - "validateBookmarkFile rejects .exe files."
+  - "validateBookmarkFile rejects files over 10MB."
+  - "All unit tests pass: cd frontend && npm test."
+
+dependencies:
+  hard:
+    - "F2: API Client and Shared Type Definitions"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/utils/sanitizeUrl.ts — sanitizeUrl(url), isSafeUrl(url)
+  - src/utils/validateFile.ts — validateBookmarkFile(file)
+  - Consumed by: F5 (BookmarkCard href), F8 (ImportModal file validation)
+
+verification: "cd frontend && npm test -- sanitizeUrl validateFile"

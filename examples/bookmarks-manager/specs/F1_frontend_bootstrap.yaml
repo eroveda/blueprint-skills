@@ -1,0 +1,56 @@
+title: "Frontend Bootstrap and Vite Configuration"
+purpose: "Scaffold the React+Vite project with all dependencies, Tailwind CSS, folder structure, and dev-server proxy configuration pointing to the Express backend."
+category: "OPERATIONS"
+
+input_context: |
+  B1 completed (backend exists at project root under /backend or sibling directory).
+  Node.js >=18 and npm available.
+  Frontend will live in a /frontend directory alongside the backend.
+
+instructions:
+  - "From project root, run: `npm create vite@latest frontend -- --template react` to scaffold React+Vite in ./frontend/."
+  - "cd into frontend/ and install production dependencies: `npm install @tanstack/react-query axios zod react-dropzone sonner`"
+  - "Install dev dependencies: `npm install -D tailwindcss @tailwindcss/vite vitest @vitest/ui jsdom @testing-library/react @testing-library/user-event msw`"
+  - "Initialize Tailwind: add `@tailwindcss/vite` plugin to vite.config.js and add `@import 'tailwindcss'` to src/index.css."
+  - "Configure vite.config.js:"
+  - "  Add server.proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: true }, '/health': { target: 'http://localhost:3000' } }"
+  - "  Add test config: { globals: true, environment: 'jsdom', setupFiles: ['./src/test/setup.ts'] }"
+  - "Create .env with: VITE_API_BASE_URL=/api"
+  - "Create .env.example with the same key."
+  - "Create folder structure inside src/: api/, components/, hooks/, types/, utils/, test/"
+  - "Create src/test/setup.ts: import '@testing-library/jest-dom'; import { server } from './mocks/server'; beforeAll(() => server.listen()); afterEach(() => server.resetHandlers()); afterAll(() => server.close())."
+  - "Create src/test/mocks/server.ts: export const server = setupServer() from msw/node (empty handlers for now)."
+  - "Update package.json scripts: add `test: vitest`, `test:ui: vitest --ui`, `preview: vite preview`."
+  - "Verify: `npm run dev` starts Vite dev server at http://localhost:5173 without errors."
+
+constraints:
+  - "Frontend lives in ./frontend/ directory — not project root."
+  - "Use @tanstack/react-query (v5) for server state — not SWR or custom fetch hooks."
+  - "Use sonner for toast notifications — not react-hot-toast or react-toastify."
+  - "Tailwind configured via @tailwindcss/vite plugin (v4 approach) — not postcss config."
+  - "VITE_API_BASE_URL must be read from import.meta.env — never hardcoded."
+  - "Vitest is the test runner — not Jest — for the frontend."
+
+acceptance_criteria:
+  - "`npm run dev` starts without errors at http://localhost:5173."
+  - "Vite proxy: fetch('/api/health') from browser proxies to Express at :3000."
+  - "Tailwind utility classes render correctly (e.g. `className='text-blue-500'` produces styled output)."
+  - "`npm test` runs Vitest and exits with no test failures (no tests yet — just setup validation)."
+  - "src/ folder contains: api/, components/, hooks/, types/, utils/, test/ directories."
+
+dependencies:
+  hard: []
+  integrates_with:
+    - "B3: REST API Contract and Shared Types (consumed via Vite proxy)"
+
+handoff: |
+  Provides:
+  - ./frontend/ — fully configured React+Vite project
+  - Vite proxy: /api → http://localhost:3000
+  - Tailwind CSS configured
+  - @tanstack/react-query installed
+  - Vitest + Testing Library + msw configured
+  - src/ folder structure: api/, components/, hooks/, types/, utils/, test/
+  - VITE_API_BASE_URL env var
+
+verification: "cd frontend && npm run dev"

@@ -1,0 +1,68 @@
+title: "REST API Contract and Shared Types"
+purpose: "Define the complete REST API route contract using Zod schemas as the single source of truth for request validation, response shapes, and error envelope; register all route stubs on the Express app."
+category: "DESIGN"
+
+input_context: |
+  B1 + B2 completed:
+  - src/app.js — Express app factory
+  - src/db/index.js — db singleton
+  - Tables: bookmarks, tags, bookmark_tags, bookmarks_fts
+  - src/db/tags.js — getTagCounts helper
+
+instructions:
+  - "Create src/schemas.js — all Zod schemas:"
+  - "  BookmarkCreateSchema: { url: z.string().url(), title: z.string().default(''), description: z.string().default(''), tags: z.array(z.string().trim().toLowerCase().min(1)).default([]) }"
+  - "  BookmarkUpdateSchema: BookmarkCreateSchema.partial() (all fields optional)"
+  - "  BookmarkQuerySchema: { q: z.string().optional(), tags: z.array(z.string()).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20), sortBy: z.enum(['createdAt','updatedAt','title']).default('createdAt'), order: z.enum(['asc','desc']).default('desc') }"
+  - "  BookmarkResponseSchema: { id, url, title, description, favicon, tags: string[], createdAt, updatedAt }"
+  - "  PaginatedResponseSchema: { data: BookmarkResponseSchema[], total, page, limit }"
+  - "  TagResponseSchema: { id, name, count }"
+  - "  ImportResultSchema: { added, skipped, failed, errors: string[] }"
+  - "  ErrorResponseSchema: { error: string, message: string, field?: string }"
+  - "Create src/routes/bookmarks.js — Express router with stub handlers returning 501 Not Implemented for each route:"
+  - "  POST   /           — create bookmark"
+  - "  GET    /           — list/search bookmarks"
+  - "  GET    /:id        — get single bookmark"
+  - "  PUT    /:id        — update bookmark"
+  - "  DELETE /:id        — delete bookmark"
+  - "Create src/routes/tags.js — Express router:"
+  - "  GET    /           — list all tags with counts"
+  - "Create src/routes/import.js — Express router:"
+  - "  POST   /           — upload and import bookmarks file"
+  - "Create src/routes/health.js — Express router:"
+  - "  GET    /           — return { status: 'ok', timestamp: new Date().toISOString() }"
+  - "Register all routers in src/app.js: app.use('/api/bookmarks', bookmarksRouter); app.use('/api/tags', tagsRouter); app.use('/api/import', importRouter); app.use('/health', healthRouter)."
+  - "Add 404 catch-all middleware in src/app.js after all routes: (req, res) => res.status(404).json({ error: 'NOT_FOUND', message: 'Route not found' })"
+
+constraints:
+  - "All API routes are prefixed with /api — health is at /health (no prefix)."
+  - "Zod schemas in src/schemas.js are the single source of truth — no duplicate type definitions."
+  - "Tags in requests are normalized: trimmed and lowercased (enforced in schema)."
+  - "Stub handlers must return 501 — never 200 with empty body — so tests can distinguish unimplemented from implemented."
+  - "Response envelope for errors always uses ErrorResponseSchema shape."
+
+acceptance_criteria:
+  - "GET /health returns 200 with { status: 'ok', timestamp: '...' }."
+  - "GET /api/bookmarks returns 501 (stub)."
+  - "POST /api/bookmarks returns 501 (stub)."
+  - "GET /api/tags returns 501 (stub)."
+  - "POST /api/import returns 501 (stub)."
+  - "GET /unknown-route returns 404 with { error: 'NOT_FOUND', message: '...' }."
+  - "src/schemas.js exports BookmarkCreateSchema, BookmarkUpdateSchema, BookmarkQuerySchema, BookmarkResponseSchema, PaginatedResponseSchema, TagResponseSchema, ImportResultSchema, ErrorResponseSchema."
+
+dependencies:
+  hard:
+    - "B2: Database Schema, Migrations, and FTS5 Setup"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/schemas.js — all Zod schemas (consumed by B4 for validation, F2 for type definitions)
+  - src/routes/bookmarks.js — router (implemented in B5)
+  - src/routes/tags.js — router (implemented in B7)
+  - src/routes/import.js — router (implemented in B8)
+  - src/routes/health.js — functional health endpoint
+  - Route prefix convention: /api/bookmarks, /api/tags, /api/import, /health
+  - Error envelope shape: { error, message, field? }
+
+verification: "node src/index.js && curl http://localhost:3000/health"

@@ -1,0 +1,70 @@
+title: "Pagination Component and View Toggle"
+purpose: "Implement pagination controls for the bookmark list and a grid/list view toggle button, wiring both into the shared app state."
+category: "CONSTRUCTION"
+
+input_context: |
+  F5 completed:
+  - src/components/bookmarks/BookmarkList.tsx — accepts viewMode prop
+  - src/hooks/useBookmarks.ts — returns { filters, setPage }, data.total, data.page, data.limit
+  - src/App.tsx — app shell with BookmarkList rendered
+  - Tailwind CSS configured
+
+instructions:
+  - "Create src/components/ui/Pagination.tsx:"
+  - "  Props: page: number, total: number, limit: number, onPageChange: (page: number) => void."
+  - "  Compute totalPages = Math.ceil(total / limit)."
+  - "  If totalPages <= 1, render nothing (null)."
+  - "  Render: Previous button (disabled when page===1), page number pills (show up to 7: first, last, current, 2 neighbors, ellipsis '...' for gaps), Next button (disabled when page===totalPages)."
+  - "  Active page pill: highlighted (bg-blue-600 text-white), non-clickable."
+  - "  Previous/Next: call onPageChange(page - 1) / onPageChange(page + 1)."
+  - "Create src/components/ui/ViewToggle.tsx:"
+  - "  Props: mode: 'grid'|'list', onChange: (mode: 'grid'|'list') => void."
+  - "  Render two icon buttons: grid icon and list icon. Active mode button is highlighted."
+  - "  Persist selected mode to localStorage with key 'bookmark-view-mode'."
+  - "  On mount, read from localStorage and call onChange with stored value (default 'grid')."
+  - "Wire in src/App.tsx:"
+  - "  Add viewMode state (default: read from localStorage or 'grid')."
+  - "  Render `<ViewToggle mode={viewMode} onChange={setViewMode} />` in AppLayout header area."
+  - "  Pass viewMode to BookmarkList."
+  - "  Render `<Pagination page={filters.page} total={data?.total ?? 0} limit={filters.limit ?? 20} onPageChange={setPage} />` below BookmarkList."
+  - "  On page change via setPage, scroll window to top: window.scrollTo({ top: 0, behavior: 'smooth' })."
+  - "Write tests in src/components/ui/Pagination.test.tsx:"
+  - "  Test: renders nothing when totalPages <= 1."
+  - "  Test: renders Previous (disabled) and Next (enabled) on page 1 of 5."
+  - "  Test: renders Previous (enabled) and Next (disabled) on last page."
+  - "  Test: clicking Next calls onPageChange(2) when on page 1."
+  - "  Test: clicking a page pill calls onPageChange with that page number."
+  - "  Test: ellipsis appears when totalPages > 7."
+  - "Write tests in src/components/ui/ViewToggle.test.tsx:"
+  - "  Test: renders grid and list buttons."
+  - "  Test: clicking list button calls onChange('list')."
+  - "  Test: active mode button has highlighted styling."
+
+constraints:
+  - "Pagination renders null (nothing) when totalPages <= 1 — no empty pagination bar."
+  - "Page change must reset to page 1 when search or tag filters change (handled in useBookmarks — not in Pagination component)."
+  - "ViewToggle persists to localStorage — key: 'bookmark-view-mode'."
+  - "Ellipsis logic: show at most 7 page pills total; use '...' for gaps between first, current neighbors, and last."
+  - "Pagination is a pure controlled component — no internal state for current page."
+
+acceptance_criteria:
+  - "Pagination renders Previous/Next correctly disabled on boundary pages."
+  - "Clicking page 3 pill calls onPageChange(3)."
+  - "Ellipsis appears for 10+ pages."
+  - "ViewToggle: clicking list icon switches BookmarkList to single-column layout."
+  - "ViewToggle persists selection across page refresh (localStorage)."
+  - "All pagination and view toggle tests pass."
+
+dependencies:
+  hard:
+    - "F5: BookmarkList, BookmarkCard, and AppLayout Components"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/components/ui/Pagination.tsx
+  - src/components/ui/ViewToggle.tsx
+  - Pagination and view toggle wired in src/App.tsx
+  - Consumed by: F10 (component tests)
+
+verification: "cd frontend && npm test -- Pagination ViewToggle"

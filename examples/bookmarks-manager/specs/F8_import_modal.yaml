@@ -1,0 +1,71 @@
+title: "Import Bookmarks Modal"
+purpose: "Implement the import modal with a drag-and-drop file zone, client-side file validation, upload progress indicator, and an ImportResult summary display after completion."
+category: "CONSTRUCTION"
+
+input_context: |
+  F3 + F4 completed:
+  - src/utils/validateFile.ts — validateBookmarkFile(file)
+  - src/hooks/useImport.ts — importFile, isImporting, result, error, reset
+  - src/types/index.ts — ImportResult
+  - src/components/ui/Modal.tsx — reusable modal (from F7)
+  - react-dropzone installed
+  - sonner for toasts
+  - src/App.tsx — showImportModal state and onImportClick handler
+
+instructions:
+  - "Create src/components/import/ImportModal.tsx:"
+  - "  Props: isOpen: boolean, onClose: () => void."
+  - "  Use useDropzone from react-dropzone: accept={{ 'text/html': ['.html'], 'application/json': ['.json'] }}, maxFiles: 1, multiple: false."
+  - "  Drop zone UI: dashed border box, upload icon, text 'Drop .html or .json bookmark file here, or click to browse'."
+  - "  On file drop/select: call validateBookmarkFile(file). If invalid, show error message in UI (do not upload)."
+  - "  If valid, call importFile(file) from useImport hook."
+  - "  States to render:"
+  - "    Idle (no result, not importing): show drop zone."
+  - "    Importing: show progress spinner with 'Importing bookmarks...' message. Disable drop zone."
+  - "    Success (result exists): show ImportResultSummary component."
+  - "    Error: show error message with retry button (calls reset() then allows new drop)."
+  - "Create src/components/import/ImportResultSummary.tsx:"
+  - "  Props: result: ImportResult."
+  - "  Render: green checkmark + '{result.added} bookmarks added', gray '{result.skipped} skipped (duplicates)', red '{result.failed} failed' (only if failed > 0), collapsible error list if errors.length > 0."
+  - "  'Import another file' button: calls reset() to return to drop zone state."
+  - "  'Done' button: calls onClose()."
+  - "Wire in src/App.tsx: render `<ImportModal isOpen={showImportModal} onClose={() => setShowImportModal(false)} />`."
+  - "Write tests in src/components/import/ImportModal.test.tsx:"
+  - "  Test: renders drop zone in idle state."
+  - "  Test: dropping a .exe file shows validation error without calling importFile."
+  - "  Test: dropping a .html file calls importFile."
+  - "  Test: shows spinner while isImporting=true."
+  - "  Test: shows ImportResultSummary after successful import."
+  - "  Test: shows error message and retry button on import failure."
+
+constraints:
+  - "Client-side validation (validateBookmarkFile) must run BEFORE calling importFile — never upload invalid files."
+  - "Only one file accepted at a time — maxFiles: 1."
+  - "Drop zone must be disabled (pointer-events-none, opacity-50) while import is in progress."
+  - "reset() from useImport must be called when 'Import another file' is clicked — clears result and error."
+  - "ImportResultSummary must show failed section only when result.failed > 0."
+
+acceptance_criteria:
+  - "Drop zone renders with correct instructions."
+  - "Dropping a .exe file shows 'Invalid file type' error, does not call importFile."
+  - "Dropping a valid .html file triggers importFile mutation."
+  - "Spinner visible during isImporting=true."
+  - "ImportResultSummary shows { added: 3, skipped: 1, failed: 0 } correctly."
+  - "Error state shows error message and retry button."
+  - "All import modal tests pass."
+
+dependencies:
+  hard:
+    - "F4: Bookmark Data Hooks"
+    - "F3: URL Display Sanitization"
+  integrates_with:
+    - "F7: Add/Edit Bookmark Modal (shares Modal.tsx wrapper)"
+
+handoff: |
+  Provides:
+  - src/components/import/ImportModal.tsx
+  - src/components/import/ImportResultSummary.tsx
+  - Import flow: validate → upload → show result
+  - Consumed by: F10 (component tests)
+
+verification: "cd frontend && npm test -- ImportModal"

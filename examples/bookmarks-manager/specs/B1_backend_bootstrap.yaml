@@ -1,0 +1,48 @@
+title: "Backend Bootstrap and Environment Setup"
+purpose: "Initialize the Node.js/Express/SQLite project with all dependencies, folder structure, configuration, and npm scripts so that all subsequent backend specs have a working foundation."
+category: "OPERATIONS"
+
+input_context: |
+  Empty project directory. Node.js >=18 and npm available.
+  No files exist yet.
+
+instructions:
+  - "Run `npm init -y` to create package.json in the project root."
+  - "Install production dependencies: `npm install express better-sqlite3 multer zod dotenv pino pino-http cors`"
+  - "Install dev dependencies: `npm install -D nodemon supertest @types/node jest`"
+  - "Create folder structure: src/routes/, src/middleware/, src/db/, src/parsers/, data/, migrations/"
+  - "Create src/index.js — Express app entry point: import express, pino-http, cors, routes; call app.listen on PORT from env (default 3000); export app for testing."
+  - "Create src/app.js — Express app factory (no listen call): registers middleware and routes, exports app. This separation allows supertest to import app without starting the server."
+  - "Create .env file with: PORT=3000, DB_PATH=./data/bookmarks.db, CORS_ORIGIN=http://localhost:5173, MAX_UPLOAD_SIZE=10mb"
+  - "Create .env.example with the same keys but empty values."
+  - "Create .gitignore with: node_modules/, data/*.db, .env"
+  - "Add npm scripts to package.json: `start: node src/index.js`, `dev: nodemon src/index.js`, `test: node --experimental-vm-modules node_modules/.bin/jest --runInBand`"
+  - "Create src/db/index.js — exports a singleton better-sqlite3 Database instance using DB_PATH from process.env. Enable WAL mode: `db.pragma('journal_mode = WAL')`."
+  - "Verify the server starts and responds: `npm run dev` then `curl http://localhost:3000/health` should return 200 (health route added in B9, stub here with a placeholder)."
+
+constraints:
+  - "Use CommonJS (require/module.exports) throughout the backend — do not use ES modules to avoid configuration overhead."
+  - "DB_PATH must be read from process.env, never hardcoded."
+  - "The app factory (src/app.js) must not call app.listen — this is reserved for src/index.js."
+  - "No TypeScript — plain JavaScript throughout the backend."
+
+acceptance_criteria:
+  - "`npm install` completes without errors."
+  - "`node src/index.js` starts without errors and logs 'Server running on port 3000'."
+  - "src/db/index.js exports a valid better-sqlite3 instance."
+  - "Folder structure matches: src/routes/, src/middleware/, src/db/, src/parsers/, data/, migrations/."
+  - ".env.example contains all required keys."
+
+dependencies:
+  hard: []
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/app.js — Express app factory for all route registration
+  - src/db/index.js — SQLite db singleton for all subsequent specs
+  - .env / .env.example — configuration baseline
+  - Folder structure: src/routes/, src/middleware/, src/db/, src/parsers/, migrations/
+  - npm scripts: start, dev, test
+
+verification: "npm install && node src/index.js"

@@ -1,0 +1,77 @@
+title: "Backend API Integration Tests"
+purpose: "Write a comprehensive integration test suite covering all API endpoints against a real in-memory SQLite database using supertest."
+category: "TESTING"
+
+input_context: |
+  B8 + B9 completed — all backend endpoints are functional:
+  - POST/GET/PUT/DELETE /api/bookmarks
+  - GET /api/bookmarks (search + filter + pagination)
+  - GET /api/tags
+  - POST /api/import
+  - GET /health
+  - src/app.js — Express app factory (importable by supertest without starting server)
+  - tests/fixtures/ — chrome_bookmarks.html, firefox_bookmarks.html, custom.json
+
+instructions:
+  - "Create tests/integration/api.test.js — full integration test file."
+  - "Setup: before each test, create a fresh in-memory SQLite database (DB_PATH=':memory:'), run migrations, inject into app."
+  - "Bookmark lifecycle tests:"
+  - "  Create a bookmark → verify 201 and returned shape."
+  - "  Get the bookmark by id → verify all fields match."
+  - "  Update title and tags → verify 200 and updated values."
+  - "  Delete → verify 204, then GET returns 404."
+  - "  Duplicate URL → verify 409."
+  - "  Invalid URL (not http/https) → verify 400."
+  - "Search tests:"
+  - "  Seed 10 bookmarks. Search by keyword present in title of 3 → verify exactly 3 returned."
+  - "  Search by keyword present in description only → verify match."
+  - "  Filter by single tag → verify only tagged bookmarks returned."
+  - "  Filter by two tags → verify AND logic (both required)."
+  - "  Paginate: page=1 limit=3 → verify 3 items, total=10. page=4 limit=3 → verify 1 item."
+  - "  Sort by title ASC → verify alphabetical order."
+  - "Tag tests:"
+  - "  GET /api/tags on empty DB → { data: [] }."
+  - "  After adding bookmarks with tags → counts are correct."
+  - "  Delete bookmark → tag count decreases."
+  - "Import tests:"
+  - "  Import chrome_bookmarks.html → verify added count, verify folder-as-tag assignment."
+  - "  Import same file → verify all skipped."
+  - "  Import firefox_bookmarks.html → verify added count."
+  - "  Import custom.json → verify added count."
+  - "  Import file with mixed valid/invalid URLs → verify added + failed counts."
+  - "  Import without file → 400."
+  - "Error handling tests:"
+  - "  POST /api/bookmarks missing url → 400 VALIDATION_ERROR."
+  - "  GET /api/bookmarks/:id with id=99999 → 404 NOT_FOUND."
+  - "  GET /health → 200 { status: 'ok', db: 'ok' }."
+  - "  GET /unknown-path → 404."
+  - "Ensure test database is torn down after each test (db.close())."
+
+constraints:
+  - "Tests must use a real SQLite in-memory database — no mocking of DB layer."
+  - "Each test must start with a clean database state (fresh in-memory DB or truncated tables)."
+  - "Use supertest with the src/app.js factory — do not start a real HTTP server."
+  - "Import tests use actual fixture files from tests/fixtures/."
+  - "All tests must be independent — no shared state between test cases."
+
+acceptance_criteria:
+  - "npm test completes with 0 failures."
+  - "Coverage: all 5 route files (bookmarks, tags, import, health, error handler) have tests."
+  - "All bookmark lifecycle tests pass."
+  - "All search/filter/pagination tests pass."
+  - "All import tests pass including deduplication and mixed-validity files."
+  - "All error handling tests pass."
+
+dependencies:
+  hard:
+    - "B8: Browser Bookmark Import Endpoint"
+    - "B9: Error Handling, Logging, and Health Check"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - tests/integration/api.test.js — full integration test suite
+  - Verified: all backend endpoints work correctly end-to-end
+  - Backend is ready for frontend integration
+
+verification: "npm test"

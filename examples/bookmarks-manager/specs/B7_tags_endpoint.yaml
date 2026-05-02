@@ -1,0 +1,47 @@
+title: "Tag Management Endpoint"
+purpose: "Implement GET /api/tags returning all tags with their bookmark counts, sorted by usage frequency descending."
+category: "CONSTRUCTION"
+
+input_context: |
+  B5 completed:
+  - src/routes/tags.js — GET / stub ready to implement
+  - src/db/tags.js — getTagCounts(db) helper (from B2)
+  - src/db/index.js — db singleton
+  - Tables: tags, bookmark_tags
+
+instructions:
+  - "Implement GET /api/tags handler in src/routes/tags.js:"
+  - "  Call getTagCounts(db) from src/db/tags.js."
+  - "  Return 200 with { data: [{id, name, count}] } sorted by count descending, then name ascending for ties."
+  - "Update getTagCounts in src/db/tags.js to add secondary sort: ORDER BY count DESC, t.name ASC."
+  - "Write tests in tests/tags.test.js:"
+  - "  Test: GET /api/tags on empty DB returns { data: [] }."
+  - "  Test: After inserting bookmarks with tags, GET /api/tags returns all tags with correct counts."
+  - "  Test: Tags are sorted by count descending."
+  - "  Test: Tag counts decrease correctly after a bookmark is deleted (CASCADE removes bookmark_tags)."
+  - "  Test: Creating a bookmark with a tag that already exists does not create a duplicate tag."
+
+constraints:
+  - "Tags are auto-managed — no POST/DELETE /api/tags endpoint exists. Tags are created/deleted via bookmark operations only."
+  - "A tag with count=0 may appear if the tag was orphaned (no cleanup required — GROUP BY LEFT JOIN handles this)."
+  - "Response is always { data: Tag[] } envelope — never a bare array."
+  - "count field is an integer (not a string from GROUP_CONCAT)."
+
+acceptance_criteria:
+  - "GET /api/tags returns 200 with { data: [{id, name, count}] }."
+  - "After adding 3 bookmarks all tagged 'dev', count for 'dev' is 3."
+  - "After deleting one of those bookmarks, count for 'dev' is 2."
+  - "Tags sorted by count DESC, then name ASC for equal counts."
+  - "All tests in tests/tags.test.js pass."
+
+dependencies:
+  hard:
+    - "B5: Bookmark CRUD Endpoints"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - GET /api/tags — functional endpoint returning [{id, name, count}] sorted by usage
+  - Consumed by F4 (useTags hook) and F6 (TagSidebar component)
+
+verification: "npm test -- --testPathPattern=tags"

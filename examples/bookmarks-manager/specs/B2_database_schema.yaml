@@ -1,0 +1,56 @@
+title: "Database Schema, Migrations, and FTS5 Setup"
+purpose: "Define the SQLite schema for bookmarks, tags, and bookmark_tags; set up FTS5 full-text search; implement a migration runner that applies versioned SQL files on startup."
+category: "DESIGN"
+
+input_context: |
+  B1 completed:
+  - src/db/index.js exports db (better-sqlite3 instance, WAL mode enabled)
+  - migrations/ directory exists
+  - src/app.js exists
+
+instructions:
+  - "Create migrations/001_initial_schema.sql with the following DDL:"
+  - "  CREATE TABLE IF NOT EXISTS bookmarks (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE, title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', favicon TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));"
+  - "  CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);"
+  - "  CREATE TABLE IF NOT EXISTS bookmark_tags (bookmark_id INTEGER NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE, tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE, PRIMARY KEY (bookmark_id, tag_id));"
+  - "  CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(title, url, description, content=bookmarks, content_rowid=id);"
+  - "  CREATE TRIGGER IF NOT EXISTS bookmarks_fts_insert AFTER INSERT ON bookmarks BEGIN INSERT INTO bookmarks_fts(rowid,title,url,description) VALUES (new.id,new.title,new.url,new.description); END;"
+  - "  CREATE TRIGGER IF NOT EXISTS bookmarks_fts_update AFTER UPDATE ON bookmarks BEGIN INSERT INTO bookmarks_fts(bookmarks_fts,rowid,title,url,description) VALUES('delete',old.id,old.title,old.url,old.description); INSERT INTO bookmarks_fts(rowid,title,url,description) VALUES(new.id,new.title,new.url,new.description); END;"
+  - "  CREATE TRIGGER IF NOT EXISTS bookmarks_fts_delete AFTER DELETE ON bookmarks BEGIN INSERT INTO bookmarks_fts(bookmarks_fts,rowid,title,url,description) VALUES('delete',old.id,old.title,old.url,old.description); END;"
+  - "  CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));"
+  - "Create src/db/migrate.js — migration runner:"
+  - "  Read all *.sql files from migrations/ sorted alphabetically."
+  - "  For each file, check if version (filename) is already in schema_migrations."
+  - "  If not applied, read file contents and execute with db.exec(). Insert version into schema_migrations."
+  - "  Export a runMigrations(db) function."
+  - "In src/index.js, call runMigrations(db) synchronously before app.listen."
+  - "Add a getTagCounts helper in src/db/tags.js: SELECT t.id, t.name, COUNT(bt.bookmark_id) as count FROM tags t LEFT JOIN bookmark_tags bt ON bt.tag_id = t.id GROUP BY t.id ORDER BY count DESC."
+
+constraints:
+  - "All timestamps stored as ISO 8601 UTC strings (strftime format above)."
+  - "Foreign key constraints must be enforced: run `db.pragma('foreign_keys = ON')` in src/db/index.js."
+  - "FTS5 content table sync must use triggers — do not manually sync FTS."
+  - "Migration runner must be idempotent — running twice must not fail or duplicate data."
+  - "Migration filenames must sort alphabetically in the intended application order (use numeric prefix: 001_, 002_, etc.)."
+
+acceptance_criteria:
+  - "Running `node src/index.js` creates all tables and the FTS5 virtual table without errors."
+  - "schema_migrations table contains '001_initial_schema.sql' after first run."
+  - "Second run of migration runner does not re-apply already-applied migrations."
+  - "PRAGMA foreign_keys returns 1 when db is opened."
+  - "INSERT into bookmarks automatically populates bookmarks_fts (verified by SELECT from bookmarks_fts)."
+
+dependencies:
+  hard:
+    - "B1: Backend Bootstrap and Environment Setup"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - SQLite tables: bookmarks, tags, bookmark_tags, schema_migrations
+  - SQLite FTS5 virtual table: bookmarks_fts (with triggers for auto-sync)
+  - src/db/migrate.js — runMigrations(db) function
+  - src/db/tags.js — getTagCounts(db) helper
+  - Schema shapes used by B3 for API contract definition
+
+verification: "node src/index.js (check console for migration success, no errors)"

@@ -1,0 +1,61 @@
+title: "Error Handling, Logging, and Health Check"
+purpose: "Implement centralized Express error handling middleware, structured request logging with pino, and a functional GET /health endpoint with graceful SIGTERM shutdown."
+category: "OPERATIONS"
+
+input_context: |
+  B5 + B6 + B7 + B8 completed:
+  - src/app.js — all routes registered
+  - src/routes/health.js — returns { status: 'ok', timestamp } (stub from B3)
+  - All CRUD, search, tag, and import endpoints functional
+  - multer error handling partially wired in B4
+
+instructions:
+  - "Create src/middleware/errorHandler.js — centralized Express error handler (4-arg middleware):"
+  - "  ZodError → 400 { error: 'VALIDATION_ERROR', message: err.issues[0].message, field: err.issues[0].path[0] }"
+  - "  err.code === 'SQLITE_CONSTRAINT_UNIQUE' → 409 { error: 'DUPLICATE_URL', message: 'Bookmark with this URL already exists' }"
+  - "  err.status === 404 or err.code === 'NOT_FOUND' → 404 { error: 'NOT_FOUND', message: err.message }"
+  - "  err.code === 'LIMIT_FILE_SIZE' (multer) → 413 { error: 'FILE_TOO_LARGE', message: 'File exceeds maximum allowed size' }"
+  - "  err instanceof multer.MulterError → 422 { error: 'UPLOAD_ERROR', message: err.message }"
+  - "  err.code === 'PARSE_ERROR' → 422 { error: 'PARSE_ERROR', message: err.message }"
+  - "  All other errors → 500 { error: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } (log full err to console.error in dev, pino in prod)"
+  - "Register errorHandler as the last middleware in src/app.js (after all routes and the 404 catch-all)."
+  - "Add pino-http request logging in src/app.js: `app.use(pinoHttp({ logger: pino({ level: process.env.LOG_LEVEL || 'info' }) }))`."
+  - "Expand GET /health in src/routes/health.js: return { status: 'ok', timestamp: new Date().toISOString(), db: db_status } where db_status is 'ok' if `db.prepare('SELECT 1').get()` succeeds, else 'degraded'."
+  - "Add graceful shutdown in src/index.js: on SIGTERM, log 'Shutting down gracefully', close the HTTP server (server.close()), then close the DB (db.close()), then process.exit(0)."
+  - "Write tests in tests/errorHandler.test.js:"
+  - "  Test: route that throws a ZodError returns 400."
+  - "  Test: route that throws SQLITE_CONSTRAINT_UNIQUE returns 409."
+  - "  Test: unknown route returns 404."
+  - "  Test: GET /health returns { status: 'ok', db: 'ok' }."
+
+constraints:
+  - "Error handler must never leak stack traces in response bodies (only log them server-side)."
+  - "500 errors must be logged with full stack trace via pino."
+  - "GET /health must check actual DB connectivity — not just return a static response."
+  - "Graceful shutdown must close HTTP server before closing DB to avoid in-flight request errors."
+  - "LOG_LEVEL env var controls pino log level (default 'info')."
+
+acceptance_criteria:
+  - "POST /api/bookmarks with invalid body returns 400 with { error: 'VALIDATION_ERROR', field: 'url' }."
+  - "GET /api/bookmarks/:nonexistentId returns 404 with { error: 'NOT_FOUND' }."
+  - "GET /health returns 200 with { status: 'ok', db: 'ok', timestamp: '...' }."
+  - "Server logs each request method + path + status code + response time via pino."
+  - "All tests in tests/errorHandler.test.js pass."
+
+dependencies:
+  hard:
+    - "B5: Bookmark CRUD Endpoints"
+    - "B6: Bookmark Search and Tag-Filter Endpoint"
+    - "B7: Tag Management Endpoint"
+    - "B8: Browser Bookmark Import Endpoint"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/middleware/errorHandler.js — centralized error handler
+  - GET /health — functional health check with DB status
+  - Structured pino logging on all requests
+  - Graceful SIGTERM shutdown
+  - All API error responses normalized to ErrorResponseSchema shape
+
+verification: "npm test -- --testPathPattern=errorHandler"

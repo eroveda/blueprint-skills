@@ -1,0 +1,77 @@
+title: "Add/Edit Bookmark Modal"
+purpose: "Implement a modal form for creating and editing bookmarks with URL validation, tag chip input, inline error display, and success/error toast notifications."
+category: "CONSTRUCTION"
+
+input_context: |
+  F4 + F5 completed:
+  - src/hooks/useBookmarks.ts — createBookmark, updateBookmark mutations
+  - src/types/index.ts — Bookmark, BookmarkInput
+  - src/App.tsx — showAddModal, editingBookmark state, onAddClick/onEditClick handlers
+  - sonner installed for toasts
+  - Tailwind CSS configured
+  - src/components/ directory exists
+
+instructions:
+  - "Create src/components/ui/Modal.tsx — reusable modal wrapper:"
+  - "  Props: isOpen: boolean, onClose: () => void, title: string, children: ReactNode."
+  - "  Render: backdrop overlay (fixed inset-0 bg-black/50), centered modal panel, title bar with × close button."
+  - "  Close on backdrop click and on Escape key (useEffect with keydown listener)."
+  - "  Trap focus inside modal when open."
+  - "Create src/components/bookmarks/TagInput.tsx — multi-tag chip input:"
+  - "  Props: tags: string[], onChange: (tags: string[]) => void."
+  - "  Render existing tags as removable chips (× button per chip)."
+  - "  Input field: on Enter or comma, add the trimmed lowercase value as a new tag (if not duplicate)."
+  - "  On Backspace with empty input, remove last tag."
+  - "Create src/components/bookmarks/AddEditBookmarkModal.tsx:"
+  - "  Props: bookmark?: Bookmark (if provided, edit mode; if undefined, add mode), isOpen: boolean, onClose: () => void."
+  - "  Form fields: URL (required, `<input type='url'>`), Title (`<input type='text'>`), Description (`<textarea>`), Tags (TagInput component)."
+  - "  On open in edit mode, pre-fill all fields from bookmark prop."
+  - "  Client-side validation with Zod: URL must be non-empty and a valid URL (use z.string().url())."
+  - "  Show inline error under URL field if validation fails."
+  - "  On submit:"
+  - "    Validate. On failure, show inline error and return."
+  - "    Call createBookmark or updateBookmark mutation."
+  - "    On success: show sonner toast.success('Bookmark saved!'), call onClose()."
+  - "    On error: show sonner toast.error(error.message || 'Failed to save bookmark')."
+  - "  Disable submit button and show spinner while mutation is pending."
+  - "Add `<Toaster />` from sonner in src/App.tsx (once, at root level)."
+  - "Wire modal in src/App.tsx: render `<AddEditBookmarkModal isOpen={showAddModal || !!editingBookmark} bookmark={editingBookmark} onClose={() => { setShowAddModal(false); setEditingBookmark(null); }} />`."
+  - "Write tests in src/components/bookmarks/AddEditBookmarkModal.test.tsx:"
+  - "  Test: renders empty form in add mode."
+  - "  Test: pre-fills fields in edit mode."
+  - "  Test: submitting empty URL shows inline validation error."
+  - "  Test: submitting valid URL calls createBookmark mutation."
+  - "  Test: successful save shows success toast and closes modal."
+  - "  Test: API error shows error toast."
+
+constraints:
+  - "URL field type='url' for browser-native validation hint, but Zod validation is the authoritative check."
+  - "Tags are stored as lowercase, trimmed strings — enforce in TagInput."
+  - "Submit button disabled during pending mutation — prevent double-submit."
+  - "Modal must be keyboard accessible: Escape closes, Tab cycles through fields."
+  - "Edit mode must not call createBookmark — only updateBookmark with the existing bookmark id."
+
+acceptance_criteria:
+  - "Add mode: submitting valid URL calls createBookmark and shows success toast."
+  - "Edit mode: form pre-filled from bookmark prop; submit calls updateBookmark."
+  - "Empty URL shows inline error 'Invalid URL', does not call mutation."
+  - "Tags input: typing 'dev' + Enter adds 'dev' chip; clicking × removes it."
+  - "Escape key closes modal."
+  - "Submit button shows spinner and is disabled while mutation is pending."
+  - "All modal tests pass."
+
+dependencies:
+  hard:
+    - "F4: Bookmark Data Hooks"
+    - "F5: BookmarkList, BookmarkCard, and AppLayout Components"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/components/ui/Modal.tsx — reusable modal wrapper
+  - src/components/bookmarks/TagInput.tsx — tag chip input
+  - src/components/bookmarks/AddEditBookmarkModal.tsx — add/edit form
+  - sonner Toaster mounted in App.tsx
+  - Consumed by: F10 (component tests)
+
+verification: "cd frontend && npm test -- AddEditBookmarkModal"

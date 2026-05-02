@@ -1,0 +1,73 @@
+title: "API Client and Shared Type Definitions"
+purpose: "Define TypeScript types for all shared data shapes and implement a typed API client module with per-resource functions for bookmarks, tags, and import."
+category: "DESIGN"
+
+input_context: |
+  F1 completed:
+  - ./frontend/src/ folder structure: api/, types/, hooks/
+  - axios installed
+  - VITE_API_BASE_URL=/api in .env
+  B3 completed (cross-layer):
+  - REST API contract: Bookmark, Tag, PaginatedResponse, ImportResult, ErrorResponse shapes
+  - Routes: /api/bookmarks, /api/tags, /api/import
+
+instructions:
+  - "Create src/types/index.ts — all shared TypeScript interfaces:"
+  - "  Bookmark: { id: number; url: string; title: string; description: string; favicon: string; tags: string[]; createdAt: string; updatedAt: string; }"
+  - "  Tag: { id: number; name: string; count: number; }"
+  - "  PaginatedResponse<T>: { data: T[]; total: number; page: number; limit: number; }"
+  - "  ImportResult: { added: number; skipped: number; failed: number; errors: string[]; }"
+  - "  ApiError: { error: string; message: string; field?: string; }"
+  - "  BookmarkFilters: { q?: string; tags?: string[]; page?: number; limit?: number; sortBy?: 'createdAt'|'updatedAt'|'title'; order?: 'asc'|'desc'; }"
+  - "  BookmarkInput: { url: string; title?: string; description?: string; tags?: string[]; }"
+  - "Create src/api/client.ts — axios instance:"
+  - "  const apiClient = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL })"
+  - "  Response interceptor: on error, extract response.data as ApiError and throw a typed ApiError object."
+  - "Create src/api/bookmarks.ts — bookmark API functions:"
+  - "  getBookmarks(filters: BookmarkFilters): Promise<PaginatedResponse<Bookmark>> — GET /bookmarks with params serialized (tags[] as repeated param: tags[]=a&tags[]=b)."
+  - "  getBookmark(id: number): Promise<Bookmark> — GET /bookmarks/:id."
+  - "  createBookmark(input: BookmarkInput): Promise<Bookmark> — POST /bookmarks."
+  - "  updateBookmark(id: number, input: Partial<BookmarkInput>): Promise<Bookmark> — PUT /bookmarks/:id."
+  - "  deleteBookmark(id: number): Promise<void> — DELETE /bookmarks/:id."
+  - "Create src/api/tags.ts:"
+  - "  getTags(): Promise<{ data: Tag[] }> — GET /tags."
+  - "Create src/api/import.ts:"
+  - "  importBookmarks(file: File): Promise<ImportResult> — POST /import with FormData."
+  - "Export all API functions from src/api/index.ts."
+  - "Write unit tests in src/api/bookmarks.test.ts using msw to intercept requests:"
+  - "  Test: getBookmarks() calls GET /api/bookmarks and returns typed PaginatedResponse."
+  - "  Test: createBookmark() calls POST /api/bookmarks with correct payload."
+  - "  Test: API error response is thrown as ApiError with correct shape."
+
+constraints:
+  - "All types in src/types/index.ts — no inline type declarations in api/ files."
+  - "Tags query param must be serialized as repeated key: tags[]=a&tags[]=b — use axios paramsSerializer with { indexes: null }."
+  - "Import function must use FormData with field name 'file' (matches multer field name on backend)."
+  - "ApiError thrown from interceptor must always have error and message fields."
+  - "No hardcoded base URLs — always use import.meta.env.VITE_API_BASE_URL."
+
+acceptance_criteria:
+  - "src/types/index.ts exports Bookmark, Tag, PaginatedResponse, ImportResult, ApiError, BookmarkFilters, BookmarkInput."
+  - "src/api/index.ts re-exports getBookmarks, getBookmark, createBookmark, updateBookmark, deleteBookmark, getTags, importBookmarks."
+  - "msw-intercepted getBookmarks() test returns typed PaginatedResponse."
+  - "msw-intercepted error test throws ApiError with error + message fields."
+  - "Tags array serialized as tags[]=a&tags[]=b in URL (verified in test)."
+  - "npm test passes for api/ tests."
+
+dependencies:
+  hard:
+    - "F1: Frontend Bootstrap and Vite Configuration"
+  integrates_with:
+    - "B3: REST API Contract and Shared Types"
+
+handoff: |
+  Provides:
+  - src/types/index.ts — Bookmark, Tag, PaginatedResponse, ImportResult, ApiError, BookmarkFilters, BookmarkInput
+  - src/api/client.ts — configured axios instance with error interceptor
+  - src/api/bookmarks.ts — getBookmarks, getBookmark, createBookmark, updateBookmark, deleteBookmark
+  - src/api/tags.ts — getTags
+  - src/api/import.ts — importBookmarks
+  - src/api/index.ts — barrel export
+  - Consumed by: F4 (hooks), F7 (modal), F8 (import modal)
+
+verification: "cd frontend && npm test"

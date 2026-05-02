@@ -1,0 +1,76 @@
+title: "Bookmark CRUD Endpoints"
+purpose: "Implement the create, read, update, and delete bookmark endpoints with full tag association management using the existing validation middleware and SQLite schema."
+category: "CONSTRUCTION"
+
+input_context: |
+  B1 + B2 + B3 + B4 completed:
+  - src/routes/bookmarks.js — router with 501 stubs for POST /, GET /, GET /:id, PUT /:id, DELETE /:id
+  - src/schemas.js — BookmarkCreateSchema, BookmarkUpdateSchema, BookmarkQuerySchema
+  - src/middleware/validate.js — validateBody, validateQuery
+  - src/middleware/sanitizeUrl.js — sanitizeUrl(url)
+  - src/db/index.js — db singleton
+  - Tables: bookmarks, tags, bookmark_tags, bookmarks_fts
+
+instructions:
+  - "Create src/db/bookmarks.js with the following prepared-statement helpers (all exported):"
+  - "  insertBookmark(db, {url, title, description, favicon}): db.prepare INSERT OR IGNORE into bookmarks; returns lastInsertRowid."
+  - "  getBookmarkById(db, id): SELECT bookmark with its tags array. Use: SELECT b.*, GROUP_CONCAT(t.name) as tag_names FROM bookmarks b LEFT JOIN bookmark_tags bt ON bt.bookmark_id=b.id LEFT JOIN tags t ON t.id=bt.tag_id WHERE b.id=? GROUP BY b.id."
+  - "  updateBookmark(db, id, {url, title, description, favicon}): UPDATE bookmarks SET ...fields, updated_at=strftime(...) WHERE id=?."
+  - "  deleteBookmark(db, id): DELETE FROM bookmarks WHERE id=?; return changes count."
+  - "Create src/db/bookmarkTags.js with tag sync helpers:"
+  - "  syncTags(db, bookmarkId, tagNames): within a transaction — upsert each tag name into tags (INSERT OR IGNORE); delete all existing bookmark_tags for bookmarkId; re-insert all new tag associations."
+  - "  getTagIds(db, tagNames): SELECT id FROM tags WHERE name IN (...)."
+  - "Implement POST /api/bookmarks handler:"
+  - "  Apply validateBody(BookmarkCreateSchema) middleware."
+  - "  Call sanitizeUrl(req.body.url) — on error, respond 400."
+  - "  Check for duplicate URL: SELECT id FROM bookmarks WHERE url=? — if found, respond 409 { error: 'DUPLICATE_URL', message: 'Bookmark with this URL already exists' }."
+  - "  Insert bookmark, then call syncTags(db, newId, tags)."
+  - "  Fetch full bookmark via getBookmarkById and return 201 with formatted response."
+  - "Implement GET /api/bookmarks/:id handler:"
+  - "  Fetch via getBookmarkById; if null, respond 404."
+  - "  Format and return 200 with bookmark (tags as string[] split from GROUP_CONCAT)."
+  - "Implement PUT /api/bookmarks/:id handler:"
+  - "  Apply validateBody(BookmarkUpdateSchema)."
+  - "  If url in body, call sanitizeUrl."
+  - "  If url changes, check for duplicate (excluding current id)."
+  - "  Update fields present in body. If tags provided, call syncTags."
+  - "  Fetch updated bookmark and return 200."
+  - "Implement DELETE /api/bookmarks/:id handler:"
+  - "  Check bookmark exists; if not, 404."
+  - "  Delete bookmark (CASCADE deletes bookmark_tags). Return 204 No Content."
+  - "Format all bookmark responses as: { id, url, title, description, favicon, tags: string[], createdAt, updatedAt } (convert tag_names GROUP_CONCAT to array, convert snake_case fields to camelCase)."
+  - "Write unit tests in tests/bookmarks.test.js covering: create, duplicate URL rejection, read, update, delete, tag sync on update."
+
+constraints:
+  - "All DB operations use prepared statements from src/db/bookmarks.js and src/db/bookmarkTags.js."
+  - "Tag sync (syncTags) must run inside a transaction to be atomic."
+  - "DELETE must cascade-remove bookmark_tags via SQLite ON DELETE CASCADE — do not manually delete join rows."
+  - "Response fields must be camelCase (createdAt, updatedAt) even though DB stores snake_case."
+  - "POST returns 201, DELETE returns 204 No Content (no body), all others return 200."
+  - "Duplicate URL check returns 409 Conflict."
+
+acceptance_criteria:
+  - "POST /api/bookmarks with valid URL returns 201 with { id, url, title, tags, createdAt, updatedAt }."
+  - "POST /api/bookmarks with same URL twice returns 409."
+  - "GET /api/bookmarks/:id with valid id returns 200 with full bookmark including tags array."
+  - "GET /api/bookmarks/:id with unknown id returns 404."
+  - "PUT /api/bookmarks/:id updates only provided fields, returns 200."
+  - "DELETE /api/bookmarks/:id returns 204 and subsequent GET returns 404."
+  - "Creating a bookmark with tags=['dev','tools'] results in 2 tag rows and 2 bookmark_tags rows."
+  - "All unit tests in tests/bookmarks.test.js pass."
+
+dependencies:
+  hard:
+    - "B3: REST API Contract and Shared Types"
+    - "B4: Input Validation, Sanitization, and File Upload Security"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/db/bookmarks.js — insertBookmark, getBookmarkById, updateBookmark, deleteBookmark
+  - src/db/bookmarkTags.js — syncTags, getTagIds
+  - POST/GET/PUT/DELETE /api/bookmarks/:id — fully functional endpoints
+  - Tag upsert and sync logic (used by B8 Import)
+  - Bookmark response format: { id, url, title, description, favicon, tags[], createdAt, updatedAt }
+
+verification: "npm test -- --testPathPattern=bookmarks"

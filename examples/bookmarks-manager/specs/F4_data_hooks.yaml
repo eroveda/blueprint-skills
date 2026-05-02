@@ -1,0 +1,65 @@
+title: "Bookmark Data Hooks (useBookmarks, useTags)"
+purpose: "Implement useBookmarks and useTags custom hooks using @tanstack/react-query to manage server state for bookmarks and tags, with debounced search, optimistic delete, and cache invalidation."
+category: "CONSTRUCTION"
+
+input_context: |
+  F2 + F3 completed:
+  - src/api/index.ts — getBookmarks, getBookmark, createBookmark, updateBookmark, deleteBookmark, getTags, importBookmarks
+  - src/types/index.ts — Bookmark, Tag, PaginatedResponse, BookmarkFilters, BookmarkInput
+  - @tanstack/react-query v5 installed
+  - src/hooks/ directory exists
+
+instructions:
+  - "Wrap the React app with QueryClientProvider in src/main.tsx: `new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } })`."
+  - "Create src/hooks/useBookmarks.ts:"
+  - "  Accept filters: BookmarkFilters as parameter."
+  - "  Use useQuery with queryKey: ['bookmarks', filters] and queryFn: () => getBookmarks(filters)."
+  - "  Debounce the q field: use a local state + useEffect with 300ms setTimeout before updating the filters passed to useQuery."
+  - "  Export useMutation for createBookmark: on success, invalidate ['bookmarks'] and ['tags'] queries."
+  - "  Export useMutation for updateBookmark(id, input): on success, invalidate ['bookmarks'] and ['tags'] queries."
+  - "  Export useMutation for deleteBookmark(id): implement optimistic update — in onMutate, snapshot current data, remove bookmark from cache; in onError, restore snapshot; in onSettled, invalidate ['bookmarks'] and ['tags']."
+  - "  Return: { data, isLoading, isError, error, createBookmark, updateBookmark, deleteBookmark, setSearch, setTags, setPage, filters }."
+  - "Create src/hooks/useTags.ts:"
+  - "  useQuery with queryKey: ['tags'] and queryFn: getTags."
+  - "  Return: { tags: Tag[], isLoading, isError }."
+  - "Create src/hooks/useImport.ts:"
+  - "  useMutation for importBookmarks(file)."
+  - "  On success, invalidate ['bookmarks'] and ['tags']."
+  - "  Return: { importFile, isImporting, result, error, reset }."
+  - "Write tests in src/hooks/useBookmarks.test.tsx using msw and renderHook from @testing-library/react:"
+  - "  Test: returns loading state initially."
+  - "  Test: returns bookmark data after successful fetch."
+  - "  Test: debounces search — fast typing triggers only one API call."
+  - "  Test: deleteBookmark mutation removes item from cache optimistically."
+  - "  Test: createBookmark mutation invalidates and refetches bookmarks."
+
+constraints:
+  - "Debounce must be implemented in the hook, not in the component — 300ms delay."
+  - "Optimistic delete must restore cache on server error."
+  - "queryKey must include all filter fields — stale queries are invalidated when filters change."
+  - "useTags and useBookmarks must invalidate each other's queries on mutations that change tag state."
+  - "useImport result is reset when reset() is called (allows re-importing)."
+
+acceptance_criteria:
+  - "useBookmarks returns { data: PaginatedResponse<Bookmark>, isLoading, isError } after fetch."
+  - "Debounce: changing q rapidly triggers only 1 API call after 300ms of inactivity."
+  - "deleteBookmark removes item from UI immediately (optimistic) and refetches on settle."
+  - "createBookmark invalidates ['bookmarks'] and ['tags'] — tag list refreshes after adding tagged bookmark."
+  - "useTags returns { tags: Tag[] } from GET /api/tags."
+  - "All hook tests pass."
+
+dependencies:
+  hard:
+    - "F2: API Client and Shared Type Definitions"
+    - "F3: URL Display Sanitization"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/hooks/useBookmarks.ts — useBookmarks(filters), with createBookmark, updateBookmark, deleteBookmark mutations
+  - src/hooks/useTags.ts — useTags()
+  - src/hooks/useImport.ts — useImport()
+  - QueryClientProvider wrapping app in main.tsx
+  - Consumed by: F5 (BookmarkList), F6 (SearchBar, TagSidebar), F7 (AddEditModal), F8 (ImportModal)
+
+verification: "cd frontend && npm test -- hooks"

@@ -1,0 +1,77 @@
+title: "Frontend Component and Hook Tests"
+purpose: "Write a comprehensive frontend test suite covering all components and hooks using Vitest, React Testing Library, and msw for API mocking, verifying the full user-facing interaction flows."
+category: "TESTING"
+
+input_context: |
+  F7 + F8 + F9 completed — all frontend components exist:
+  - src/components/bookmarks/ — BookmarkCard, BookmarkList, AddEditBookmarkModal, TagInput, EmptyState
+  - src/components/search/ — SearchBar
+  - src/components/tags/ — TagSidebar
+  - src/components/import/ — ImportModal, ImportResultSummary
+  - src/components/ui/ — Modal, Pagination, ViewToggle
+  - src/hooks/ — useBookmarks, useTags, useImport
+  - src/utils/ — sanitizeUrl, validateFile
+  - src/test/mocks/server.ts — msw server (empty handlers)
+
+instructions:
+  - "Create src/test/mocks/handlers.ts — msw handlers for all API routes:"
+  - "  GET /api/bookmarks → return PaginatedResponse with 3 sample bookmarks."
+  - "  GET /api/bookmarks/:id → return single bookmark."
+  - "  POST /api/bookmarks → return 201 with created bookmark."
+  - "  PUT /api/bookmarks/:id → return 200 with updated bookmark."
+  - "  DELETE /api/bookmarks/:id → return 204."
+  - "  GET /api/tags → return { data: [{id:1, name:'dev', count:2}] }."
+  - "  POST /api/import → return { added: 3, skipped: 0, failed: 0, errors: [] }."
+  - "Register handlers in src/test/mocks/server.ts."
+  - "Create src/test/integration/App.test.tsx — full app integration tests:"
+  - "  Test: app renders header, search bar, tag sidebar, bookmark list."
+  - "  Test: initial load shows loading skeletons then bookmark cards."
+  - "  Test: typing in search input triggers filtered API call after debounce."
+  - "  Test: clicking a tag in sidebar triggers filtered API call with tag param."
+  - "  Test: clicking Add Bookmark opens AddEditBookmarkModal."
+  - "  Test: submitting add form calls POST /api/bookmarks and refreshes list."
+  - "  Test: clicking edit button on card opens modal pre-filled with bookmark data."
+  - "  Test: clicking delete button calls DELETE after confirm dialog."
+  - "  Test: clicking Import opens ImportModal."
+  - "  Test: dropping a file in ImportModal calls POST /api/import and shows result."
+  - "  Test: pagination controls appear when total > limit; clicking page 2 refetches."
+  - "  Test: clicking tag chip on BookmarkCard adds that tag to sidebar filter."
+  - "Create src/test/accessibility/a11y.test.tsx — basic accessibility checks:"
+  - "  Test: AppLayout has no axe violations (use jest-axe or vitest-axe)."
+  - "  Test: BookmarkCard has no axe violations."
+  - "  Test: AddEditBookmarkModal has no axe violations when open."
+  - "  Test: ImportModal has no axe violations when open."
+  - "Add test coverage configuration in vite.config.ts: coverage provider v8, include src/**/*.{ts,tsx}, exclude src/test/**."
+  - "Ensure all previously written component tests still pass (BookmarkCard, SearchBar, TagSidebar, Pagination, ViewToggle, AddEditBookmarkModal, ImportModal)."
+
+constraints:
+  - "All API calls in tests must be intercepted by msw — no real network requests."
+  - "Tests must clean up msw handlers after each test (resetHandlers in afterEach — already configured in setup.ts)."
+  - "Integration tests render the full App component, not individual components in isolation."
+  - "Accessibility tests require vitest-axe or @axe-core/react — install if not already present."
+  - "Test coverage threshold: aim for >80% statement coverage on src/ (excluding test/ and types/)."
+
+acceptance_criteria:
+  - "cd frontend && npm test — all tests pass with 0 failures."
+  - "App integration test: full add-bookmark flow passes (open modal → fill form → submit → card appears in list)."
+  - "App integration test: search debounce test — type 3 chars quickly, only 1 API call after 300ms."
+  - "App integration test: import flow passes (open modal → drop file → spinner → result shown)."
+  - "Accessibility: no axe violations on AppLayout, BookmarkCard, modals."
+  - "Coverage report generated (npm run test -- --coverage)."
+
+dependencies:
+  hard:
+    - "F7: Add/Edit Bookmark Modal"
+    - "F8: Import Bookmarks Modal"
+    - "F9: Pagination Component and View Toggle"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/test/mocks/handlers.ts — msw handlers for all API routes
+  - src/test/integration/App.test.tsx — full integration test suite
+  - src/test/accessibility/a11y.test.tsx — accessibility checks
+  - Verified: all frontend components and flows work end-to-end
+  - Frontend is ready for production build and integration with backend
+
+verification: "cd frontend && npm test"

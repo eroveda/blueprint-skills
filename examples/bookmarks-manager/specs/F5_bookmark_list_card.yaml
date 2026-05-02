@@ -1,0 +1,75 @@
+title: "BookmarkList, BookmarkCard, and AppLayout Components"
+purpose: "Implement the main layout shell, bookmark grid/list view, individual bookmark cards with sanitized links and tag display, loading skeletons, and empty state."
+category: "CONSTRUCTION"
+
+input_context: |
+  F4 completed:
+  - src/hooks/useBookmarks.ts — useBookmarks(filters)
+  - src/types/index.ts — Bookmark, Tag types
+  - src/utils/sanitizeUrl.ts — sanitizeUrl(url)
+  - Tailwind CSS configured
+  - src/components/ directory exists
+
+instructions:
+  - "Create src/components/layout/AppLayout.tsx:"
+  - "  Full-height layout: header (top bar with app title, Add Bookmark button, Import button), left sidebar (TagSidebar slot), main content area (SearchBar slot + BookmarkList slot)."
+  - "  Header: `<header className='...'><h1>Bookmarks</h1><div>(Add + Import buttons)</div></header>`."
+  - "  Sidebar: fixed width (w-64), scrollable, contains TagSidebar."
+  - "  Main: flex-1, scrollable, contains SearchBar at top then BookmarkList."
+  - "  Accept props: onAddClick, onImportClick (callbacks for button clicks)."
+  - "Create src/components/bookmarks/BookmarkCard.tsx:"
+  - "  Props: bookmark: Bookmark, onEdit: (b: Bookmark) => void, onDelete: (id: number) => void."
+  - "  Render: favicon (`<img src={favicon || '/favicon-fallback.svg'} onError={...hide favicon...}>`), title as `<a href={sanitizeUrl(bookmark.url)} target='_blank' rel='noopener noreferrer'>{bookmark.title || bookmark.url}</a>`, URL as truncated text, description (truncated to 2 lines with expand toggle), tag chips."
+  - "  Action buttons: Edit (pencil icon), Delete (trash icon with confirmation dialog using window.confirm)."
+  - "  Tag chips: each tag rendered as `<span className='...'>{tag}</span>` — clickable to filter (call onTagClick prop)."
+  - "  Add prop: onTagClick: (tag: string) => void — called when a tag chip is clicked."
+  - "Create src/components/bookmarks/BookmarkCardSkeleton.tsx — loading placeholder matching BookmarkCard layout using Tailwind animate-pulse."
+  - "Create src/components/bookmarks/BookmarkList.tsx:"
+  - "  Props: bookmarks: Bookmark[], isLoading: boolean, viewMode: 'grid'|'list', onEdit, onDelete, onTagClick."
+  - "  If isLoading: render 6 BookmarkCardSkeleton components."
+  - "  If bookmarks.length === 0 and not loading: render EmptyState component."
+  - "  Otherwise: render bookmarks in a grid (grid-cols-1 md:grid-cols-2 lg:grid-cols-3 for grid mode, single column for list mode)."
+  - "Create src/components/bookmarks/EmptyState.tsx — centered message: 'No bookmarks yet. Add your first bookmark or import from browser.' with an icon."
+  - "Create src/App.tsx — wire everything together:"
+  - "  Use useBookmarks({}) and useTags() hooks."
+  - "  State: viewMode ('grid'|'list'), showAddModal (bool), showImportModal (bool), editingBookmark (Bookmark|null)."
+  - "  Render AppLayout with BookmarkList, placeholders for SearchBar (F6) and TagSidebar (F6), Add/Import modal placeholders (F7/F8)."
+  - "Write tests in src/components/bookmarks/BookmarkCard.test.tsx:"
+  - "  Test: renders title as link with sanitized href."
+  - "  Test: javascript: URL href is replaced with about:blank."
+  - "  Test: clicking Delete calls onDelete with correct id."
+  - "  Test: clicking tag chip calls onTagClick with tag name."
+  - "  Test: favicon fallback renders when favicon is empty."
+
+constraints:
+  - "Every `<a>` rendering a bookmark URL must use sanitizeUrl() — no raw URL in href."
+  - "Every external link must have target='_blank' rel='noopener noreferrer'."
+  - "Delete must use window.confirm before calling onDelete — no custom dialog required yet."
+  - "Tailwind classes only — no inline styles."
+  - "BookmarkCard must not fetch data — it receives bookmark via props."
+
+acceptance_criteria:
+  - "BookmarkCard renders title as clickable link with safe href."
+  - "BookmarkCard with javascript: URL renders href='about:blank'."
+  - "BookmarkList renders 6 skeletons when isLoading=true."
+  - "BookmarkList renders EmptyState when bookmarks=[] and isLoading=false."
+  - "BookmarkList renders all bookmark cards in grid mode."
+  - "AppLayout renders header, sidebar, and main content areas."
+  - "All component tests pass."
+
+dependencies:
+  hard:
+    - "F4: Bookmark Data Hooks"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/components/layout/AppLayout.tsx
+  - src/components/bookmarks/BookmarkCard.tsx
+  - src/components/bookmarks/BookmarkCardSkeleton.tsx
+  - src/components/bookmarks/BookmarkList.tsx
+  - src/components/bookmarks/EmptyState.tsx
+  - src/App.tsx — main app shell
+  - Consumed by: F7 (AddEditModal rendered in App), F9 (Pagination added to BookmarkList)
+
+verification: "cd frontend && npm test -- BookmarkCard BookmarkList"

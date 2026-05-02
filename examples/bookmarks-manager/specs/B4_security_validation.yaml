@@ -1,0 +1,59 @@
+title: "Input Validation, Sanitization, and File Upload Security"
+purpose: "Implement reusable validation middleware using Zod schemas, URL sanitization, CORS configuration, and file upload restrictions with multer."
+category: "SECURITY"
+
+input_context: |
+  B1 + B2 + B3 completed:
+  - src/schemas.js — Zod schemas (BookmarkCreateSchema, BookmarkUpdateSchema, BookmarkQuerySchema)
+  - src/app.js — Express app factory with routes registered
+  - .env — CORS_ORIGIN, MAX_UPLOAD_SIZE defined
+
+instructions:
+  - "Create src/middleware/validate.js — validation middleware factory:"
+  - "  validateBody(schema): middleware that calls schema.safeParse(req.body); on failure, returns 400 with { error: 'VALIDATION_ERROR', message: issues[0].message, field: issues[0].path[0] }."
+  - "  validateQuery(schema): same pattern for req.query."
+  - "Create src/middleware/sanitizeUrl.js — URL sanitization:"
+  - "  Export sanitizeUrl(url): parse with new URL(url); reject if protocol is not 'http:' or 'https:'; return the normalized URL string. Throw an error with message 'URL must use http or https protocol' otherwise."
+  - "  This is called inside route handlers before insert/update, not as middleware."
+  - "Configure CORS in src/app.js: `app.use(cors({ origin: process.env.CORS_ORIGIN, methods: ['GET','POST','PUT','DELETE'], allowedHeaders: ['Content-Type'] }))`."
+  - "Configure multer in src/middleware/upload.js:"
+  - "  Use memoryStorage (do not write files to disk)."
+  - "  Enforce file size limit from MAX_UPLOAD_SIZE env var (parse '10mb' → bytes: 10 * 1024 * 1024)."
+  - "  fileFilter: accept only files where originalname ends with .html or .json OR mimetype is text/html or application/json. Reject others with a multer error."
+  - "  Export upload.single('file') as uploadMiddleware."
+  - "Add multer error handler in src/app.js error middleware: if err.code === 'LIMIT_FILE_SIZE' → 413 { error: 'FILE_TOO_LARGE', message: '...' }; if err instanceof multer.MulterError → 422 { error: 'UPLOAD_ERROR', message: err.message }."
+  - "Ensure better-sqlite3 prepared statements are used for all DB queries (enforced by code review in construction specs — documented here as a constraint)."
+  - "Add integration test: POST /api/bookmarks with url='javascript:alert(1)' must return 400."
+  - "Add integration test: POST /api/import with a 11MB file must return 413."
+
+constraints:
+  - "URL sanitization must reject javascript:, data:, vbscript: and any non-http/https scheme."
+  - "File uploads stored in memory only (memoryStorage) — never written to disk."
+  - "MAX_UPLOAD_SIZE parsed from env string (e.g. '10mb') — never hardcoded."
+  - "CORS origin comes from process.env.CORS_ORIGIN — never hardcoded."
+  - "All DB queries must use parameterized prepared statements (db.prepare(...).run/get/all with bound parameters)."
+
+acceptance_criteria:
+  - "POST /api/bookmarks with url='javascript:alert(1)' returns 400 with VALIDATION_ERROR or a sanitization error."
+  - "POST /api/bookmarks with missing url field returns 400 with { error: 'VALIDATION_ERROR', field: 'url' }."
+  - "POST /api/import with a file larger than MAX_UPLOAD_SIZE returns 413."
+  - "POST /api/import with a .exe file returns 422."
+  - "OPTIONS request to /api/bookmarks returns CORS headers matching CORS_ORIGIN."
+  - "validateBody and validateQuery are exported from src/middleware/validate.js."
+  - "uploadMiddleware is exported from src/middleware/upload.js."
+
+dependencies:
+  hard:
+    - "B3: REST API Contract and Shared Types"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/middleware/validate.js — validateBody(schema), validateQuery(schema)
+  - src/middleware/sanitizeUrl.js — sanitizeUrl(url)
+  - src/middleware/upload.js — uploadMiddleware (multer single-file, memory storage)
+  - CORS configured on Express app
+  - Multer error handler in app error middleware
+  - Security constraints for all downstream construction specs
+
+verification: "npm test (security middleware tests)"

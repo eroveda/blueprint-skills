@@ -1,0 +1,65 @@
+title: "Bookmark Search and Tag-Filter Endpoint"
+purpose: "Implement GET /api/bookmarks with full-text search via FTS5, tag filtering, pagination, and sorting, returning a PaginatedResponse."
+category: "CONSTRUCTION"
+
+input_context: |
+  B5 completed:
+  - src/routes/bookmarks.js — GET / stub ready to implement
+  - src/db/index.js — db singleton
+  - src/schemas.js — BookmarkQuerySchema: { q, tags[], page, limit, sortBy, order }
+  - src/middleware/validate.js — validateQuery
+  - Tables: bookmarks, tags, bookmark_tags, bookmarks_fts (FTS5)
+
+instructions:
+  - "Create src/db/search.js with searchBookmarks(db, {q, tags, page, limit, sortBy, order}) function:"
+  - "  Base query joins bookmarks with tags via bookmark_tags and aggregates tag names."
+  - "  If q is provided, add FTS5 subquery: AND b.id IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)."
+  - "  Escape FTS5 query: wrap user input in double quotes to prevent FTS5 syntax errors (e.g. '\"user input\"')."
+  - "  If tags[] is provided and non-empty, add tag filter: AND b.id IN (SELECT bookmark_id FROM bookmark_tags bt2 JOIN tags t2 ON t2.id=bt2.tag_id WHERE t2.name IN (...) GROUP BY bookmark_id HAVING COUNT(DISTINCT t2.name) = ?) — use AND logic (bookmark must have ALL selected tags)."
+  - "  Apply ORDER BY: sortBy maps to b.title, b.created_at, b.updated_at; order is ASC/DESC. Default: b.created_at DESC."
+  - "  Run count query first (SELECT COUNT(DISTINCT b.id) ...) with same WHERE conditions to get total."
+  - "  Apply LIMIT and OFFSET: offset = (page - 1) * limit."
+  - "  Return { data: Bookmark[], total, page, limit }."
+  - "Implement GET /api/bookmarks handler in src/routes/bookmarks.js:"
+  - "  Apply validateQuery(BookmarkQuerySchema) middleware."
+  - "  Call searchBookmarks(db, req.query)."
+  - "  Format each bookmark in data as { id, url, title, description, favicon, tags: string[], createdAt, updatedAt }."
+  - "  Return 200 with { data, total, page, limit }."
+  - "Write tests in tests/search.test.js:"
+  - "  Seed 5 bookmarks with varied titles, URLs, descriptions, and tags."
+  - "  Test: GET /api/bookmarks returns all 5 with pagination metadata."
+  - "  Test: ?q=<term> returns only matching bookmarks."
+  - "  Test: ?tags[]=dev returns only bookmarks tagged 'dev'."
+  - "  Test: ?tags[]=dev&tags[]=tools returns only bookmarks with BOTH tags."
+  - "  Test: ?page=2&limit=2 returns correct slice."
+  - "  Test: ?sortBy=title&order=asc returns alphabetical order."
+  - "  Test: ?q=<nonexistent> returns { data: [], total: 0 }."
+
+constraints:
+  - "Tag filter uses AND logic — bookmarks must have ALL specified tags, not ANY."
+  - "FTS5 query must be escaped (wrap in double quotes) to handle user input with special characters."
+  - "Count query must use the same WHERE clause as the data query — no separate code paths."
+  - "sortBy values from the API ('createdAt') must map to actual column names ('created_at') internally."
+  - "Empty q string is treated as no search (same as omitting q)."
+  - "Maximum limit is 100 (enforced by BookmarkQuerySchema)."
+
+acceptance_criteria:
+  - "GET /api/bookmarks returns { data: [], total: 0, page: 1, limit: 20 } on empty DB."
+  - "GET /api/bookmarks?q=github returns bookmarks whose title, url, or description contains 'github'."
+  - "GET /api/bookmarks?tags[]=dev&tags[]=tools returns only bookmarks tagged with both 'dev' AND 'tools'."
+  - "GET /api/bookmarks?page=2&limit=2 returns the correct 2 bookmarks and correct total."
+  - "GET /api/bookmarks?sortBy=title&order=asc returns alphabetically sorted results."
+  - "All tests in tests/search.test.js pass."
+
+dependencies:
+  hard:
+    - "B5: Bookmark CRUD Endpoints"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/db/search.js — searchBookmarks(db, filters) function
+  - GET /api/bookmarks — fully functional with FTS5 search, tag filter, pagination, sorting
+  - Consumed by F4 (useBookmarks hook) and F6 (SearchBar + TagSidebar)
+
+verification: "npm test -- --testPathPattern=search"

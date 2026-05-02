@@ -1,0 +1,76 @@
+title: "Browser Bookmark Import Endpoint"
+purpose: "Implement POST /api/import that accepts a browser bookmark file (Chrome/Firefox HTML or JSON), parses it, deduplicates against existing bookmarks, and bulk-inserts new entries returning an ImportResult."
+category: "CONSTRUCTION"
+
+input_context: |
+  B4 + B5 completed:
+  - src/middleware/upload.js — uploadMiddleware (multer memory storage, .html/.json only, size limit)
+  - src/routes/import.js — POST / stub ready to implement
+  - src/db/bookmarks.js — insertBookmark, getBookmarkById
+  - src/db/bookmarkTags.js — syncTags
+  - src/db/index.js — db singleton
+  - Tables: bookmarks, tags, bookmark_tags
+
+instructions:
+  - "Create src/parsers/netscape.js — Netscape HTML bookmark parser:"
+  - "  parseNetscapeHTML(htmlString): parse with regex or lightweight HTML parser (no external dep needed — use regex to extract <DT><A HREF='...' ...>title</A> elements)."
+  - "  Walk the structure tracking folder hierarchy. Map each folder name to a tag (lowercase, trimmed)."
+  - "  Return array of { url, title, tags: string[] } objects."
+  - "  Skip <HR>, <H3> (folder headers are only used for tag extraction), and non-http/https URLs."
+  - "Create src/parsers/jsonBookmarks.js — JSON bookmark parser:"
+  - "  parseJSONBookmarks(jsonString): parse JSON; support flat array format [{url, title, tags}] and nested {bookmarks:[...]} envelope."
+  - "  Return array of { url, title, tags: string[] } objects."
+  - "  Skip entries missing a url field."
+  - "Create src/parsers/index.js — format detector:"
+  - "  detectAndParse(buffer, originalname): if originalname ends with .html, decode buffer as UTF-8 and call parseNetscapeHTML. If .json, call parseJSONBookmarks. Otherwise throw error."
+  - "Implement POST /api/import handler in src/routes/import.js:"
+  - "  Apply uploadMiddleware then handler."
+  - "  Call detectAndParse(req.file.buffer, req.file.originalname). On parse error, return 422 { error: 'PARSE_ERROR', message }."
+  - "  Fetch all existing URLs from DB: SELECT url FROM bookmarks. Build a Set<string> for O(1) dedup."
+  - "  Open a db.transaction(() => { ... }) — inside, for each parsed bookmark:"
+  - "    If URL in existing set → skipped++."
+  - "    Else: sanitizeUrl (skip invalid with failed++, push error message). Insert bookmark. syncTags. Add URL to existing set."
+  - "  After transaction, return 200 with { added, skipped, failed, errors: string[] }."
+  - "Write tests in tests/import.test.js using fixture files:"
+  - "  Create tests/fixtures/chrome_bookmarks.html — valid Chrome HTML export with 3 bookmarks in 2 folders."
+  - "  Create tests/fixtures/firefox_bookmarks.html — valid Firefox HTML export with 2 bookmarks."
+  - "  Create tests/fixtures/custom.json — JSON array with 3 bookmarks."
+  - "  Test: import chrome fixture → 3 added, folder names become tags."
+  - "  Test: import same fixture again → 0 added, 3 skipped."
+  - "  Test: import JSON fixture → 3 added."
+  - "  Test: import file with 1 valid + 1 javascript: URL → 1 added, 1 failed, error message in errors[]."
+  - "  Test: import unsupported file type → 422."
+  - "  Test: import empty HTML file → { added:0, skipped:0, failed:0, errors:[] }."
+
+constraints:
+  - "Entire import must run inside a single SQLite transaction — either all succeed or rollback on DB error."
+  - "Deduplication is URL-exact (case-sensitive) — no normalization of trailing slashes."
+  - "Folder hierarchy mapping to tags: each ancestor folder name becomes a tag on the bookmark."
+  - "Invalid URLs (non-http/https) count as failed, not skipped. Skipped means URL already exists."
+  - "Parser must handle both Chrome and Firefox Netscape HTML format quirks (Firefox wraps in <DL> at root)."
+  - "JSON parser must not crash on missing or null fields — skip invalid entries gracefully."
+
+acceptance_criteria:
+  - "POST /api/import with chrome_bookmarks.html returns { added: 3, skipped: 0, failed: 0, errors: [] }."
+  - "Bookmarks imported from chrome HTML have tags derived from their folder names."
+  - "POST /api/import again with same file returns { added: 0, skipped: 3, failed: 0, errors: [] }."
+  - "POST /api/import with custom.json returns { added: 3, skipped: 0, failed: 0, errors: [] }."
+  - "POST /api/import with a file containing a javascript: URL reports it in errors[] and failed count."
+  - "POST /api/import without a file returns 400."
+  - "All tests in tests/import.test.js pass."
+
+dependencies:
+  hard:
+    - "B4: Input Validation, Sanitization, and File Upload Security"
+    - "B5: Bookmark CRUD Endpoints"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/parsers/netscape.js — parseNetscapeHTML(htmlString)
+  - src/parsers/jsonBookmarks.js — parseJSONBookmarks(jsonString)
+  - src/parsers/index.js — detectAndParse(buffer, originalname)
+  - POST /api/import — functional import endpoint
+  - Consumed by F8 (ImportModal component)
+
+verification: "npm test -- --testPathPattern=import"

@@ -1,0 +1,73 @@
+title: "SearchBar and TagSidebar Filter Components"
+purpose: "Implement the search input with debounce and the tag filter sidebar with multi-select, wiring both into the shared filter state from useBookmarks."
+category: "CONSTRUCTION"
+
+input_context: |
+  F4 completed:
+  - src/hooks/useBookmarks.ts — returns { setSearch, setTags, filters }
+  - src/hooks/useTags.ts — returns { tags: Tag[] }
+  - src/types/index.ts — Tag type
+  - src/components/layout/AppLayout.tsx — sidebar slot and search bar slot
+  - Tailwind CSS configured
+
+instructions:
+  - "Create src/components/search/SearchBar.tsx:"
+  - "  Props: value: string, onChange: (val: string) => void."
+  - "  Render: `<input type='search' placeholder='Search bookmarks...' value={value} onChange={e => onChange(e.target.value)} className='...'/>` with a clear button (×) when value is non-empty."
+  - "  Debounce is handled in useBookmarks hook — SearchBar is a pure controlled component."
+  - "  Show a search icon (heroicons or simple SVG) on the left side of the input."
+  - "Create src/components/tags/TagSidebar.tsx:"
+  - "  Props: tags: Tag[], selectedTags: string[], onToggle: (tag: string) => void, onClear: () => void."
+  - "  Render a scrollable list of tag pills: each shows tag name + bookmark count badge."
+  - "  Active (selected) tags: highlighted background (e.g. bg-blue-600 text-white)."
+  - "  Inactive tags: bg-gray-100 text-gray-700, hover highlight."
+  - "  'Clear filters' button at top — only visible when selectedTags.length > 0."
+  - "  If tags list is empty: show 'No tags yet' message."
+  - "  Tag list sorted by count descending (already sorted from API)."
+  - "Wire SearchBar and TagSidebar into src/App.tsx:"
+  - "  Create local state for rawSearch (controlled input value)."
+  - "  Pass rawSearch to SearchBar.onChange; in onChange, update rawSearch — the debounce in useBookmarks handles the API call delay."
+  - "  Pass selectedTags from useBookmarks filters to TagSidebar."
+  - "  Pass setTags from useBookmarks as onToggle logic: toggle tag in/out of selected array."
+  - "  onTagClick from BookmarkCard: add that tag to selected tags (if not already selected)."
+  - "Write tests in src/components/search/SearchBar.test.tsx:"
+  - "  Test: renders input with placeholder 'Search bookmarks...'."
+  - "  Test: onChange is called with correct value on user input."
+  - "  Test: clear button appears when value is non-empty and clicking it calls onChange('')."
+  - "Write tests in src/components/tags/TagSidebar.test.tsx:"
+  - "  Test: renders all tags with names and counts."
+  - "  Test: selected tags are visually highlighted."
+  - "  Test: clicking a tag calls onToggle with tag name."
+  - "  Test: Clear filters button only visible when selectedTags is non-empty."
+  - "  Test: clicking Clear filters calls onClear."
+
+constraints:
+  - "SearchBar is a pure controlled component — no internal debounce state. Debounce lives in useBookmarks."
+  - "TagSidebar receives tags and selectedTags via props — it does not call useTags directly."
+  - "Multi-select toggle logic: if tag already in selectedTags, remove it; if not, add it."
+  - "onTagClick from BookmarkCard must add the clicked tag to selectedTags (not replace)."
+  - "Clear filters resets selectedTags to [] and rawSearch to ''."
+
+acceptance_criteria:
+  - "Typing in SearchBar updates rawSearch; after 300ms, useBookmarks triggers API call with q param."
+  - "TagSidebar renders tag pills sorted by count."
+  - "Clicking a tag highlights it and triggers bookmark refetch filtered by that tag."
+  - "Clicking same tag again deselects it."
+  - "Multi-tag selection: selecting 2 tags filters to bookmarks with BOTH tags."
+  - "Clear filters resets all filters and refetches all bookmarks."
+  - "All component tests pass."
+
+dependencies:
+  hard:
+    - "F4: Bookmark Data Hooks"
+  integrates_with: []
+
+handoff: |
+  Provides:
+  - src/components/search/SearchBar.tsx
+  - src/components/tags/TagSidebar.tsx
+  - Filter state wired in src/App.tsx (rawSearch, selectedTags)
+  - onTagClick from BookmarkCard connected to TagSidebar selection
+  - Consumed by: F10 (tested as part of full app flow)
+
+verification: "cd frontend && npm test -- SearchBar TagSidebar"
