@@ -155,3 +155,16 @@ Each layer is decomposed independently, then linked via the contracts (API endpo
 - Do not forget OUTPUTS (some projects have implicit outputs like state changes)
 - Do not mix layers (don't put mobile UI in a backend Workpack)
 - Do not treat SOPORTE as optional (auth/deploy are mandatory for production)
+
+## Output
+
+Save the complete analysis to disk so it persists beyond the conversation:
+
+1. **Write the file** `01-universal-framework-output.md` in the user's current working directory
+2. **File content must include:**
+   - A brief introduction line (project name, detected type)
+   - The complete YAML block (`project`, `dimensions`, `mapping_to_swebok`, `next_step`)
+   - A closing suggestion: *"Next step: run `/blueprint-skills:swebok-decompose` to generate the work breakdown."*
+3. **After saving**, confirm to the user: *"Saved analysis to `01-universal-framework-output.md`"*
+
+This file is consumed by `swebok-decompose` in the next stage.

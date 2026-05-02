@@ -153,3 +153,26 @@ handoff: |
 
 verification: "run project test suite"
 ```
+
+## Output
+
+Save all generated specs and execution order to disk so they persist beyond the conversation.
+
+### Mode 1 — Single file (≤15 specs)
+
+1. **Write all specs** to `03-SPECS.yaml` in the user's current working directory
+2. **Write the execution order** to `03-execution-order.md` with the phase table
+
+### Mode 2 — Multiple files (>15 specs)
+
+1. **Create a `specs/` directory** in the user's current working directory
+2. **Write each spec** as a separate file: `specs/<id>_<descriptive_name>.yaml`
+   - Example: `specs/B1_project_bootstrap.yaml`, `specs/F10_e2e_tests.yaml`
+   - Use the node ID as prefix followed by a snake_case descriptive name
+3. **Write the execution order** to `03-execution-order.md` with the phase table
+
+### In both modes
+
+- The execution order file (`03-execution-order.md`) must include the phase table with spec groupings and parallelization notes
+- **After saving**, confirm to the user with the list of files written
+- Suggest: *"Next step: run the documentation skills (`generate-architecture-doc`, `generate-functional-flows`, `generate-user-guide`, `generate-api-catalog`) to complete the blueprint."*
