@@ -6,8 +6,8 @@
   "plugins": [
     {
       "name": "blueprint-skills",
-      "description": "7 skills for SWEBOK-aligned project decomposition and IEEE 15289 documentation generation",
-      "version": "0.1.0",
+      "description": "9 skills for SWEBOK-aligned project decomposition and IEEE 15289 documentation generation",
+      "version": "0.1.1",
       "source": "./",
       "author": {
         "name": "eroveda"

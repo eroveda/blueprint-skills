@@ -1,7 +1,7 @@
 {
   "name": "blueprint-skills",
   "description": "Domain decomposition + professional documentation skills for Claude Code, aligned with IEEE SWEBOK v4.0",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "eroveda"
   },

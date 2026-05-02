@@ -12,7 +12,7 @@ Generate professional specifications and complete documentation from a project d
 [![Status](https://img.shields.io/badge/Status-v0.1-blue.svg)]()
 [![Claude Code](https://img.shields.io/badge/Claude_Code-Plugin-orange.svg)](https://claude.com/plugins)
 
-[Quick Start](#quick-start) · [The 7 Skills](#the-7-skills) · [Case Study](examples/iot-machine-monitoring/) · [Standards](#standards-alignment) · [Why Blueprint?](#why-blueprint-skills)
+[Quick Start](#quick-start) · [The 9 Skills](#the-9-skills) · [Case Study](examples/iot-machine-monitoring/) · [Standards](#standards-alignment) · [Why Blueprint?](#why-blueprint-skills)
 
 </div>
 
@@ -56,7 +56,7 @@ The skills self-orchestrate — each one suggests the next.
 
 ---
 
-## The 7 Skills
+## The 9 Skills
 
 | # | Skill | Purpose |
 |---|---|---|
@@ -66,7 +66,9 @@ The skills self-orchestrate — each one suggests the next.
 | 4 | `generate-architecture-doc` | Produce IEEE 15289-compliant ARCHITECTURE.md |
 | 5 | `generate-functional-flows` | Plain-language flows + state machines + business rules |
 | 6 | `generate-user-guide` | End-user documentation with troubleshooting |
-| 7 | `generate-api-catalog` | Full API reference (REST + WebSocket + MQTT + CLI + gRPC) |
+| 7 | `generate-api-catalog` | Full API reference with /v1/ versioning (REST + WebSocket + MQTT + CLI + gRPC) |
+| 8 | `generate-blueprint-summary` | Master index BLUEPRINT.md tying all blueprint files together |
+| 9 | `generate-testing-strategy` | Consolidated TESTING_STRATEGY.md across unit/integration/E2E |
 
 Each skill is invocable independently with explicit namespace: `/blueprint-skills:skill-name`.
 
@@ -81,17 +83,21 @@ Blueprint Skills follow a 3-stage workflow that produces real files in your proj
 **Stage 1 — Analysis & Decomposition** (saved as files)
 1. `/blueprint-skills:universal-framework` → produces `01-universal-framework-output.md`
 2. `/blueprint-skills:swebok-decompose` → produces `02-decomposition-output.md`
-3. `/blueprint-skills:swebok-generate-spec` → produces `03-SPECS.yaml` (or `specs/` directory for projects with more than 15 nodes)
+3. `/blueprint-skills:swebok-generate-spec` → produces `03-SPECS.yaml` (or `specs/` directory for projects with more than 15 nodes) + `03-execution-order.md`
 
 **Stage 2 — Documentation** (saved as files)
 4. `/blueprint-skills:generate-architecture-doc` → produces `ARCHITECTURE.md`
 5. `/blueprint-skills:generate-functional-flows` → produces `FUNCTIONAL_FLOWS.md`
 6. `/blueprint-skills:generate-user-guide` → produces `USER_GUIDE.md`
-7. `/blueprint-skills:generate-api-catalog` → produces `API_CATALOG.md`
+7. `/blueprint-skills:generate-api-catalog` → produces `API_CATALOG.md` (with /v1/ versioning)
+
+**Stage 3 — Project Master Documents** (saved as files)
+8. `/blueprint-skills:generate-blueprint-summary` → produces `BLUEPRINT.md` (master index)
+9. `/blueprint-skills:generate-testing-strategy` → produces `TESTING_STRATEGY.md` (consolidated test plan)
 
 ### What you get
 
-After running all 7 skills, your project directory contains ready-to-use files:
+After running all 9 skills, your project directory contains ready-to-use files:
 
 ```
 your-project/
@@ -99,10 +105,12 @@ your-project/
 ├── 02-decomposition-output.md         ← Stage 1
 ├── 03-SPECS.yaml                      ← Stage 1
 ├── 03-execution-order.md              ← Stage 1
-├── ARCHITECTURE.md                    ← Stage 2 (IEEE 15289)
+├── ARCHITECTURE.md                    ← Stage 2
 ├── FUNCTIONAL_FLOWS.md                ← Stage 2
 ├── USER_GUIDE.md                      ← Stage 2
-└── API_CATALOG.md                     ← Stage 2
+├── API_CATALOG.md                     ← Stage 2 (with /v1/)
+├── BLUEPRINT.md                       ← Stage 3 (master index)
+└── TESTING_STRATEGY.md                ← Stage 3
 ```
 
 ---
