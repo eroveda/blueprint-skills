@@ -72,6 +72,41 @@ Each skill is invocable independently with explicit namespace: `/blueprint-skill
 
 ---
 
+## How to Use
+
+### Workflow
+
+Blueprint Skills follow a 3-stage workflow that produces real files in your project directory at every step:
+
+**Stage 1 — Analysis & Decomposition** (saved as files)
+1. `/blueprint-skills:universal-framework` → produces `01-universal-framework-output.md`
+2. `/blueprint-skills:swebok-decompose` → produces `02-decomposition-output.md`
+3. `/blueprint-skills:swebok-generate-spec` → produces `03-SPECS.yaml` (or `specs/` directory for projects with more than 15 nodes)
+
+**Stage 2 — Documentation** (saved as files)
+4. `/blueprint-skills:generate-architecture-doc` → produces `ARCHITECTURE.md`
+5. `/blueprint-skills:generate-functional-flows` → produces `FUNCTIONAL_FLOWS.md`
+6. `/blueprint-skills:generate-user-guide` → produces `USER_GUIDE.md`
+7. `/blueprint-skills:generate-api-catalog` → produces `API_CATALOG.md`
+
+### What you get
+
+After running all 7 skills, your project directory contains ready-to-use files:
+
+```
+your-project/
+├── 01-universal-framework-output.md   ← Stage 1
+├── 02-decomposition-output.md         ← Stage 1
+├── 03-SPECS.yaml                      ← Stage 1
+├── 03-execution-order.md              ← Stage 1
+├── ARCHITECTURE.md                    ← Stage 2 (IEEE 15289)
+├── FUNCTIONAL_FLOWS.md                ← Stage 2
+├── USER_GUIDE.md                      ← Stage 2
+└── API_CATALOG.md                     ← Stage 2
+```
+
+---
+
 ## Why Blueprint Skills?
 
 Most AI coding tools optimize for "make the prompt work" — not "make the code maintainable in production."
