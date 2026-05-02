@@ -1,0 +1,291 @@
+# ============================================================
+# SPEC B9 — Motor de Decisión Climática
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Motor de Decisión Climática"
+purpose: "Evaluar datos meteorológicos contra umbrales por deporte y clasificar cada franja horaria como APTO/PRECAUCIÓN/CANCELADO"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulo Weather (B8) implementado:
+    - WeatherService.getCurrentWeather(spotId) → WeatherDataDTO
+    - WeatherService.getForecast(spotId) → WeatherDataDTO[]
+    - Tabla weather_data poblada con datos horarios por spot.
+  Módulo Sports (B6) implementado:
+    - SportService.findById(sportId) → Sport
+    - Tabla weather_thresholds con umbrales por deporte:
+        id, sport_id, max_wind_speed_kt, max_wave_height_m,
+        min_water_temp_c, max_wave_period_s, conditions_json, action (cancel|warn)
+  Tabla weather_decision_log creada:
+    id, booking_id (nullable), sport_id, spot_id, weather_data_id,
+    decision (approved|warning|cancelled), reasons_json, decided_at
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear enum y tipos en src/modules/weather-decision/types.ts"
+    detail: |
+      enum WeatherDecision { APPROVED = 'approved', WARNING = 'warning', CANCELLED = 'cancelled' }
+
+      interface WeatherEvaluation {
+        decision: WeatherDecision
+        reasons: string[]           // ej: ["Viento 35kt > máximo 25kt para vela"]
+        weather_data: WeatherDataDTO
+        threshold: WeatherThreshold
+        sport: Sport
+        spot_id: string
+        evaluated_at: Date
+      }
+
+      interface TimeSlotEvaluation {
+        date: string               // YYYY-MM-DD
+        start_time: string         // HH:mm
+        end_time: string           // HH:mm
+        decision: WeatherDecision  // peor decisión de las horas dentro del slot
+        reasons: string[]
+        hourly_details: WeatherEvaluation[]
+      }
+
+      Semáforo visual:
+        APPROVED  → 🟢 verde  → "Condiciones óptimas"
+        WARNING   → 🟡 amarillo → "Condiciones límite, precaución"
+        CANCELLED → 🔴 rojo   → "Condiciones no aptas, clase cancelada"
+
+  - step: 2
+    action: "Implementar WeatherDecisionService en src/modules/weather-decision/weather-decision.service.ts"
+    detail: |
+      Inyectar: WeatherService, SportService, WeatherThresholdRepository,
+                WeatherDecisionLogRepository.
+
+      Método principal:
+      async evaluateConditions(spotId: string, sportId: string, date: Date, startTime: string, endTime: string): Promise<TimeSlotEvaluation>
+        1. Obtener forecast del spot para la fecha solicitada
+        2. Filtrar WeatherDataDTOs que caigan dentro de [startTime, endTime]
+        3. Obtener umbrales del deporte via WeatherThresholdRepository.findBySportId(sportId)
+        4. Para cada hora dentro del slot, llamar evaluateSingleHour()
+        5. La decisión del slot = la PEOR decisión individual:
+           Si alguna hora es CANCELLED → slot CANCELLED
+           Si alguna hora es WARNING y ninguna CANCELLED → slot WARNING
+           Si todas APPROVED → slot APPROVED
+        6. Retornar TimeSlotEvaluation
+
+      Método interno:
+      evaluateSingleHour(weather: WeatherDataDTO, threshold: WeatherThreshold): WeatherEvaluation
+        reasons = []
+        decision = APPROVED
+
+        // Evaluar viento
+        if weather.wind_speed_kt > threshold.max_wind_speed_kt:
+          decision = threshold.action === 'cancel' ? CANCELLED : WARNING
+          reasons.push("Viento {weather.wind_speed_kt}kt > máximo {threshold.max_wind_speed_kt}kt")
+        elif weather.wind_speed_kt > threshold.max_wind_speed_kt * 0.8:
+          if decision !== CANCELLED: decision = WARNING
+          reasons.push("Viento {weather.wind_speed_kt}kt cercano al límite {threshold.max_wind_speed_kt}kt")
+
+        // Evaluar oleaje
+        if weather.wave_height_m > threshold.max_wave_height_m:
+          decision = threshold.action === 'cancel' ? CANCELLED : WARNING
+          reasons.push("Oleaje {weather.wave_height_m}m > máximo {threshold.max_wave_height_m}m")
+        elif weather.wave_height_m > threshold.max_wave_height_m * 0.8:
+          if decision !== CANCELLED: decision = WARNING
+          reasons.push("Oleaje {weather.wave_height_m}m cercano al límite {threshold.max_wave_height_m}m")
+
+        // Evaluar temperatura del agua
+        if weather.water_temp_c !== null && weather.water_temp_c < threshold.min_water_temp_c:
+          if decision !== CANCELLED: decision = WARNING
+          reasons.push("Temp agua {weather.water_temp_c}°C < mínimo {threshold.min_water_temp_c}°C")
+
+        // Evaluar conditions_json (reglas adicionales custom)
+        if threshold.conditions_json:
+          evaluateCustomConditions(weather, threshold.conditions_json, reasons, decision)
+
+        return { decision, reasons, weather_data, threshold, sport, spot_id, evaluated_at: now }
+
+  - step: 3
+    action: "Implementar evaluación masiva para dashboard"
+    detail: |
+      Método en WeatherDecisionService:
+
+      async evaluateDayForSpot(spotId: string, sportId: string, date: Date): Promise<TimeSlotEvaluation[]>
+        1. Obtener forecast del spot para el día completo
+        2. Obtener schedules del día para ese deporte y spot
+        3. Para cada schedule, evaluar el slot con evaluateConditions()
+        4. Retornar array de TimeSlotEvaluation (una por franja horaria)
+
+      async evaluateWeekForSpot(spotId: string, sportId: string): Promise<Map<string, TimeSlotEvaluation[]>>
+        1. Para cada día de los próximos 7 días
+        2. Llamar evaluateDayForSpot()
+        3. Retornar mapa fecha → evaluaciones
+
+  - step: 4
+    action: "Implementar logging de decisiones en la base de datos"
+    detail: |
+      Método en WeatherDecisionService:
+
+      async logDecision(evaluation: TimeSlotEvaluation, bookingId?: string): Promise<void>
+        1. Crear registro en weather_decision_log:
+           - booking_id: bookingId o null
+           - sport_id: evaluation.sport.id
+           - spot_id: evaluation.spot_id
+           - weather_data_id: referencia al WeatherData usado
+           - decision: evaluation.decision
+           - reasons_json: JSON.stringify(evaluation.reasons)
+           - decided_at: now
+        2. Si decision === CANCELLED, emitir evento 'weather.slot.cancelled'
+           para que B11 (cancelación automática) pueda reaccionar.
+
+  - step: 5
+    action: "Implementar WeatherDecisionController en src/modules/weather-decision/weather-decision.controller.ts"
+    detail: |
+      @Controller('api/weather-decision')
+
+      @Get('evaluate')
+      async evaluate(
+        @Query('spotId') spotId: string,
+        @Query('sportId') sportId: string,
+        @Query('date') date: string,      // YYYY-MM-DD
+        @Query('startTime') startTime: string,  // HH:mm
+        @Query('endTime') endTime: string       // HH:mm
+      ): Promise<TimeSlotEvaluation>
+        → Validar parámetros requeridos
+        → Llamar evaluateConditions()
+        → Retornar 200 con TimeSlotEvaluation
+
+      @Get('day/:spotId/:sportId')
+      async evaluateDay(
+        @Param('spotId') spotId: string,
+        @Param('sportId') sportId: string,
+        @Query('date') date: string
+      ): Promise<TimeSlotEvaluation[]>
+        → Retornar evaluación de todas las franjas del día con semáforo
+
+      @Get('week/:spotId/:sportId')
+      async evaluateWeek(
+        @Param('spotId') spotId: string,
+        @Param('sportId') sportId: string
+      ): Promise<Map<string, TimeSlotEvaluation[]>>
+        → Retornar evaluación semanal con semáforo por franja
+
+      Todos los endpoints requieren autenticación (JWT guard).
+
+  - step: 6
+    action: "Definir umbrales por defecto por deporte (seeds)"
+    detail: |
+      Crear seed data en src/database/seeds/weather-thresholds.seed.ts:
+
+      Vela:
+        max_wind_speed_kt: 25
+        max_wave_height_m: 2.0
+        min_water_temp_c: 12
+        action: cancel
+
+      Surf:
+        max_wind_speed_kt: 30
+        max_wave_height_m: 3.0  (olas grandes son buenas, pero hay tope para clases)
+        min_water_temp_c: 14
+        action: cancel
+
+      Kayak:
+        max_wind_speed_kt: 15
+        max_wave_height_m: 1.0
+        min_water_temp_c: 10
+        action: cancel
+
+      Paddle Surf:
+        max_wind_speed_kt: 12
+        max_wave_height_m: 0.5
+        min_water_temp_c: 14
+        action: cancel
+
+      NOTA: Estos son defaults. Admin puede personalizar por escuela via B6.
+
+  - step: 7
+    action: "Escribir tests unitarios en src/modules/weather-decision/__tests__/weather-decision.service.spec.ts"
+    detail: |
+      Tests del motor de evaluación:
+        - "should return APPROVED when all conditions are within thresholds"
+        - "should return WARNING when wind is at 80-100% of threshold"
+        - "should return CANCELLED when wind exceeds threshold"
+        - "should return CANCELLED when wave height exceeds threshold"
+        - "should return WARNING when water temp is below minimum"
+        - "should use worst-case decision across hours in a time slot"
+        - "should evaluate paddle surf stricter than surf (lower thresholds)"
+        - "should include human-readable reasons in Spanish"
+        - "should log decision to weather_decision_log"
+        - "should emit weather.slot.cancelled event when CANCELLED"
+
+      Usar datos meteorológicos fixtures:
+        - calm_conditions: wind 5kt, waves 0.3m, water 18°C → todo APPROVED
+        - windy_conditions: wind 28kt, waves 1.5m, water 16°C → vela CANCELLED, surf APPROVED
+        - stormy_conditions: wind 40kt, waves 4m, water 15°C → todo CANCELLED
+        - cold_conditions: wind 8kt, waves 0.5m, water 10°C → paddle WARN, kayak APPROVED
+        - borderline_conditions: wind 20kt, waves 0.9m → kayak CANCELLED, vela WARNING
+
+  - step: 8
+    action: "Escribir tests de integración en src/modules/weather-decision/__tests__/weather-decision.integration.spec.ts"
+    detail: |
+      Tests e2e:
+        - "GET /api/weather-decision/evaluate returns TimeSlotEvaluation"
+        - "GET /api/weather-decision/day/:spotId/:sportId returns array of evaluations"
+        - "GET /api/weather-decision/week/:spotId/:sportId returns 7-day map"
+        - "returns 400 when required query params are missing"
+        - "returns 404 when spot or sport does not exist"
+        - "decision log is persisted in database after evaluation"
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "La decisión del slot es SIEMPRE la peor hora individual dentro del rango"
+  - "El umbral de WARNING es automáticamente el 80% del umbral de CANCELLED"
+  - "Las razones deben estar en español y ser legibles por el usuario"
+  - "Cada evaluación DEBE registrarse en weather_decision_log para trazabilidad"
+  - "Los umbrales por defecto son seeds iniciales — admin puede personalizar"
+  - "El evento weather.slot.cancelled es el trigger para cancelación automática (B11)"
+  - "Paddle surf tiene los umbrales más estrictos, surf los más permisivos"
+  - "Si no hay datos meteorológicos disponibles, la decisión es WARNING (no CANCELLED)"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "Con viento 5kt y olas 0.3m, TODOS los deportes retornan APPROVED"
+  - "Con viento 28kt, vela retorna CANCELLED y surf retorna APPROVED"
+  - "Con viento 40kt, TODOS los deportes retornan CANCELLED"
+  - "Con viento 20kt y olas 0.9m, kayak retorna CANCELLED y vela retorna WARNING"
+  - "El semáforo muestra la peor condición del slot, no el promedio"
+  - "GET /api/weather-decision/day devuelve array con una evaluación por franja"
+  - "Cada decisión queda registrada en weather_decision_log"
+  - "Se emite evento weather.slot.cancelled cuando una franja pasa a CANCELLED"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B6: Catálogo de Deportes y Umbrales — WeatherThreshold table y SportService"
+    - "B8: Motor de Integración Meteorológica — WeatherService.getCurrentWeather/getForecast"
+  integrates_with:
+    - "B10: Sistema de Reservas — consulta evaluación al mostrar disponibilidad"
+    - "B11: Cancelación Automática — escucha evento weather.slot.cancelled"
+    - "B14: Reportes — consulta decision logs para métricas de cancelación"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - WeatherDecisionService.evaluateConditions(spotId, sportId, date, start, end) → TimeSlotEvaluation
+    - WeatherDecisionService.evaluateDayForSpot(spotId, sportId, date) → TimeSlotEvaluation[]
+    - WeatherDecisionService.evaluateWeekForSpot(spotId, sportId) → Map<string, TimeSlotEvaluation[]>
+    - GET /api/weather-decision/evaluate → para frontend semáforo
+    - GET /api/weather-decision/day/:spotId/:sportId → para dashboard diario
+    - GET /api/weather-decision/week/:spotId/:sportId → para vista semanal
+    - Evento weather.slot.cancelled → para B11 cancelación automática
+    - Tabla weather_decision_log → para B14 reportes históricos
+
+verification: "npm test -- --testPathPattern=weather-decision"

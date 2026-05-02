@@ -1,0 +1,273 @@
+# ============================================================
+# SPEC F8 — Panel del Instructor
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Panel del Instructor"
+purpose: "Implementar el dashboard del instructor con vista de agenda diaria y semanal, semáforo meteorológico por slot, listado de alumnos por clase, gestión de disponibilidad y historial de clases"
+category: "CONSTRUCTION"
+
+input_context: |
+  Design System (F2) y Auth con roles (F3) implementados.
+  AuthGuard con requiredRole='instructor' configurado.
+  Backend operativo con endpoints:
+    - GET /api/instructors/me/agenda?date= (B7)
+    - GET /api/instructors/me/agenda?from=&to= (B7, rango semanal)
+    - GET /api/instructors/me/classes/:classId/students (B7)
+    - GET /api/instructors/me/availability (B7)
+    - PATCH /api/instructors/me/availability (B7)
+    - POST /api/instructors/me/vacation (B7)
+    - GET /api/instructors/me/history?page=&limit= (B7)
+    - GET /api/weather/:spotId (B8)
+  Componentes disponibles: WeatherSemaphore, CalendarPicker, StatusBadge.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear layout del panel instructor en app/(dashboard)/instructor/layout.tsx"
+    detail: |
+      Layout con Sidebar (F2) configurada para instructor:
+        Items:
+          - "Agenda" (icon Calendar, path /instructor/dashboard)
+          - "Disponibilidad" (icon Clock, path /instructor/availability)
+          - "Historial" (icon History, path /instructor/history)
+
+      Protegido con AuthGuard requiredRole='instructor'.
+      Sidebar colapsable en desktop, sheet en mobile.
+      Header con nombre del instructor y avatar.
+
+  - step: 2
+    action: "Crear vista de agenda diaria en app/(dashboard)/instructor/dashboard/page.tsx"
+    detail: |
+      Header:
+        - Título "Agenda del día"
+        - DatePicker para cambiar fecha (default: hoy)
+        - Botones de navegación: < Ayer | Hoy | Mañana >
+        - Toggle: Vista Día / Vista Semana
+
+      Vista diaria — DailyAgendaView component:
+        - Timeline vertical con franjas horarias (6:00 - 20:00)
+        - Cada clase como card en la timeline:
+
+        ClassSlotCard:
+          - Hora: "09:00 - 11:00"
+          - Deporte + nivel badge
+          - Spot/ubicación
+          - WeatherSemaphore (prominente, tamaño md) con datos en vivo
+          - Participantes: "{booked}/{max}" con barra de progreso
+          - Botón "Ver alumnos" → expande lista de alumnos inline
+
+        Colores de fondo según weather status:
+          - APPROVED: borde izquierdo verde, fondo blanco
+          - WARNING: borde izquierdo amarillo, fondo yellow-50
+          - CANCELLED: borde izquierdo rojo, fondo red-50, tachado sutil
+
+        Empty slots: mostrar como "Disponible" en gris claro.
+        Día sin clases: "No tienes clases programadas para este día."
+
+      Fetching:
+        - useQuery: GET /api/instructors/me/agenda?date={selectedDate}
+        - Para cada slot con spotId: useCurrentWeather(spotId) en paralelo
+
+  - step: 3
+    action: "Crear vista de agenda semanal en components/instructor/WeeklyCalendarView.tsx"
+    detail: |
+      Grid semanal:
+        - Columnas: Lunes a Domingo (o Lun-Vie configurable)
+        - Filas: franjas horarias (cada hora)
+        - Header de cada día: fecha + WeatherSemaphore resumen del día
+
+      Cada celda con clase:
+        - Fondo coloreado según weather_status (verde/amarillo/rojo con opacidad)
+        - Texto: deporte abreviado + hora
+        - Tooltip on hover: deporte completo, instructor, spot, weather details
+        - Click: navegar a vista diaria de ese día
+
+      Leyenda:
+        - Verde: "Condiciones aptas"
+        - Amarillo: "Precaución"
+        - Rojo: "Cancelado por clima"
+        - Gris: "Sin clase"
+
+      Fetching:
+        - useQuery: GET /api/instructors/me/agenda?from={mondayISO}&to={sundayISO}
+
+  - step: 4
+    action: "Crear lista de alumnos expandible en components/instructor/StudentList.tsx"
+    detail: |
+      Props: classId: string
+
+      Fetching: useQuery GET /api/instructors/me/classes/{classId}/students
+
+      Renderizado como lista expandible dentro del ClassSlotCard:
+        - Cada alumno:
+          - Avatar + nombre
+          - Teléfono (si disponible)
+          - Número de participantes en su booking
+          - StatusBadge de su booking (confirmed, waitlist)
+        - Total: "{totalStudents} alumnos confirmados"
+        - Si hay waitlist: "({waitlistCount} en lista de espera)"
+
+      Loading: skeleton de 3 items.
+
+  - step: 5
+    action: "Crear página de disponibilidad en app/(dashboard)/instructor/availability/page.tsx"
+    detail: |
+      Título: "Gestionar Disponibilidad"
+
+      Grid semanal de disponibilidad:
+        - Columnas: Lunes a Domingo
+        - Filas: franjas de 1 hora (7:00 - 21:00)
+        - Cada celda: toggle on/off (click para cambiar)
+          - On (disponible): fondo ocean-100, borde ocean-300
+          - Off (no disponible): fondo gris-100
+        - Drag para seleccionar múltiples celdas (opcional, mejora UX)
+
+      Cargar estado actual:
+        - GET /api/instructors/me/availability
+        - Pre-marcar celdas según schedule actual
+
+      Guardar cambios:
+        - Botón "Guardar disponibilidad" (sticky bottom en mobile)
+        - PATCH /api/instructors/me/availability { slots: [{ dayOfWeek, startTime, endTime, available }] }
+        - Toast: "Disponibilidad actualizada"
+        - Indicar cambios no guardados con badge en el botón
+
+      Sección "Períodos de Vacaciones":
+        - Lista de vacaciones programadas con DateRangePicker
+        - Botón "Añadir vacaciones"
+        - Para cada período: fecha inicio, fecha fin, botón eliminar
+        - POST /api/instructors/me/vacation { from, to }
+        - Warning: "Las clases en este período serán reasignadas o canceladas"
+
+  - step: 6
+    action: "Crear página de historial en app/(dashboard)/instructor/history/page.tsx"
+    detail: |
+      Título: "Historial de Clases"
+
+      Filtros:
+        - DateRangePicker (rango de fechas)
+        - Select deporte
+        - Botón aplicar
+
+      Lista paginada de clases pasadas:
+        Cada item (HistoryClassCard):
+          - Fecha y hora
+          - Deporte + nivel
+          - Spot/ubicación
+          - Número de alumnos que asistieron
+          - Weather conditions de ese día:
+            - WeatherSemaphore (estado que tuvo)
+            - Viento, oleaje, temperatura (datos históricos)
+          - StatusBadge: "Completada" o "Cancelada por clima"
+
+      Resumen estadístico (header):
+        - Total clases impartidas en el período
+        - Total alumnos
+        - Clases canceladas por clima (count + %)
+
+      Fetching:
+        - useQuery: GET /api/instructors/me/history?from=&to=&sport=&page=&limit=
+        - Paginación tradicional con botones Anterior/Siguiente
+
+  - step: 7
+    action: "Crear hooks del instructor en hooks/useInstructor.ts"
+    detail: |
+      export function useInstructorAgenda(date: string) {
+        return useQuery({
+          queryKey: ['instructor-agenda', date],
+          queryFn: () => apiClient.get('/instructors/me/agenda', { params: { date } }),
+        });
+      }
+
+      export function useInstructorWeeklyAgenda(from: string, to: string) {
+        return useQuery({
+          queryKey: ['instructor-agenda-weekly', from, to],
+          queryFn: () => apiClient.get('/instructors/me/agenda', { params: { from, to } }),
+        });
+      }
+
+      export function useClassStudents(classId: string) {
+        return useQuery({
+          queryKey: ['class-students', classId],
+          queryFn: () => apiClient.get(`/instructors/me/classes/${classId}/students`),
+          enabled: !!classId,
+        });
+      }
+
+      export function useInstructorAvailability() {
+        return useQuery({
+          queryKey: ['instructor-availability'],
+          queryFn: () => apiClient.get('/instructors/me/availability'),
+        });
+      }
+
+      export function useUpdateAvailability() {
+        return useMutation({
+          mutationFn: (data) => apiClient.patch('/instructors/me/availability', data),
+          onSuccess: () => queryClient.invalidateQueries(['instructor-availability']),
+        });
+      }
+
+      export function useInstructorHistory(filters) {
+        return useQuery({
+          queryKey: ['instructor-history', filters],
+          queryFn: () => apiClient.get('/instructors/me/history', { params: filters }),
+        });
+      }
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Solo accesible por usuarios con role='instructor' — AuthGuard obligatorio"
+  - "El semáforo meteorológico en la agenda debe mostrar datos EN VIVO del spot de cada clase"
+  - "La vista semanal debe ser legible en pantallas de tablet y desktop (mín 768px)"
+  - "En mobile, la vista semanal puede simplificarse a lista con días colapsables"
+  - "Los cambios de disponibilidad no afectan clases ya reservadas — solo disponibilidad futura"
+  - "Datos de alumnos: solo nombre y teléfono — no mostrar email ni datos de pago"
+  - "Las vacaciones deben programarse con al menos 48h de anticipación"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "La agenda diaria muestra todas las clases del día con WeatherSemaphore en vivo"
+  - "Las clases con CANCELLED muestran fondo rojo y están marcadas como canceladas"
+  - "La lista de alumnos se expande correctamente dentro de cada slot de clase"
+  - "La vista semanal muestra calendar coloreado por weather status"
+  - "La gestión de disponibilidad permite activar/desactivar slots y guardar cambios"
+  - "Los períodos de vacaciones se crean y eliminan correctamente"
+  - "El historial muestra clases pasadas con condiciones meteorológicas de ese día"
+  - "Solo usuarios con rol instructor pueden acceder al panel"
+  - "La navegación entre días funciona con los botones ayer/hoy/mañana"
+  - "El panel es usable en mobile con sidebar como sheet"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F2: Design System — WeatherSemaphore, CalendarPicker, Sidebar, StatusBadge"
+    - "F3: Auth — AuthGuard con role='instructor'"
+    - "B7: Gestión de Instructores — endpoints de agenda, disponibilidad, historial"
+    - "B9: Motor de Decisión Climática — weather status por slot"
+  integrates_with:
+    - "B8: Motor Meteorológico — weather data en vivo para cada spot"
+    - "F7: Notificaciones — instructor recibe notificaciones de cancelación"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Panel instructor en /instructor/dashboard con agenda diaria y semanal
+    - Página /instructor/availability con gestión de slots y vacaciones
+    - Página /instructor/history con historial de clases y weather data
+    - DailyAgendaView y WeeklyCalendarView components
+    - StudentList component expandible
+    - Hooks: useInstructorAgenda, useClassStudents, useInstructorAvailability, useInstructorHistory
+
+verification: "cd frontend && npm run build && npm run lint"

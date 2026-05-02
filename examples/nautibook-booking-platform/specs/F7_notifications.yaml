@@ -1,0 +1,271 @@
+# ============================================================
+# SPEC F7 — Centro de Notificaciones
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Centro de Notificaciones"
+purpose: "Implementar el sistema de notificaciones in-app con icono de campana, panel dropdown, tipos renderizados con estilos diferenciados, push notifications con FCM y página de configuración de preferencias"
+category: "CONSTRUCTION"
+
+input_context: |
+  Auth y perfil de usuario implementados (F3).
+  Navbar con espacio reservado para icono de notificaciones (F2).
+  Backend operativo con endpoints:
+    - GET /api/notifications?userId=&page=&limit= (B13)
+    - PATCH /api/notifications/:id/read (B13)
+    - PATCH /api/notifications/read-all (B13)
+    - GET /api/notifications/preferences (B13)
+    - PATCH /api/notifications/preferences (B13)
+    - POST /api/notifications/register-device (B13, push token)
+  Firebase Cloud Messaging configurado en el backend (B13).
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear componente NotificationBell en components/notifications/NotificationBell.tsx"
+    detail: |
+      Ubicación: integrado en Navbar (componente ya existente en F2).
+
+      Renderizado:
+        - Icono Bell de lucide-react
+        - Badge rojo con número de unread count (si > 0)
+          - Si count > 99: mostrar "99+"
+          - Animación: pulse al recibir nueva notificación
+        - onClick: toggle del NotificationPanel (dropdown)
+
+      Fetching del count:
+        - useQuery: GET /api/notifications?unread=true&limit=0
+        - Respuesta incluye total count
+        - refetchInterval: 30000 (30 segundos) para mantener actualizado
+        - Alternativamente: WebSocket/SSE si el backend lo soporta
+
+  - step: 2
+    action: "Crear componente NotificationPanel en components/notifications/NotificationPanel.tsx"
+    detail: |
+      Dropdown panel que aparece debajo del bell icon:
+
+      Header:
+        - Título "Notificaciones"
+        - Botón "Marcar todo como leído" (texto, azul)
+          → PATCH /api/notifications/read-all
+
+      Lista de notificaciones:
+        - Infinite scroll (useInfiniteQuery)
+        - GET /api/notifications?page=1&limit=10, cargar más al scroll
+        - Cada item: NotificationItem component
+
+      NotificationItem:
+        Renderizado diferenciado por type:
+
+        weather_cancel (type: 'weather_cancel'):
+          - Borde izquierdo rojo
+          - Icono CloudRain (lucide) en círculo rojo
+          - Título: "Clase cancelada por clima"
+          - Body: texto de la notificación
+          - Timestamp: "hace 2 horas" (date-fns formatDistanceToNow)
+
+        booking_confirmed (type: 'booking_confirmed'):
+          - Borde izquierdo verde
+          - Icono CheckCircle en círculo verde
+          - Título: "Reserva confirmada"
+
+        reminder (type: 'reminder'):
+          - Borde izquierdo azul
+          - Icono Clock en círculo azul
+          - Título: "Recordatorio de clase"
+
+        refund (type: 'refund'):
+          - Borde izquierdo amarillo
+          - Icono Wallet en círculo amarillo
+          - Título: "Reembolso procesado"
+
+        waitlist_promoted (type: 'waitlist_promoted'):
+          - Borde izquierdo verde
+          - Icono ArrowUp en círculo verde
+          - Título: "Plaza disponible"
+
+      Estilo de notificación leída vs no leída:
+        - No leída: fondo ocean-50, texto bold
+        - Leída: fondo blanco, texto normal
+
+      onClick en cada item:
+        - Marcar como leída: PATCH /api/notifications/{id}/read
+        - Navegar a la URL asociada (ej: /my-bookings/{bookingId} para booking_confirmed)
+
+      Footer:
+        - Link "Ver todas las notificaciones" → /notifications
+
+      Empty state: "No tienes notificaciones"
+
+  - step: 3
+    action: "Crear página completa de notificaciones en app/(protected)/notifications/page.tsx"
+    detail: |
+      Página con lista completa de notificaciones:
+        - Título "Notificaciones"
+        - Filtros: All / Sin leer / Por tipo (dropdown)
+        - Lista con infinite scroll (mismos NotificationItem que el panel)
+        - Botón "Marcar todo como leído" en header
+        - Link a "Configuración de notificaciones" → /notifications/settings
+
+  - step: 4
+    action: "Configurar Firebase Cloud Messaging en lib/firebase.ts"
+    detail: |
+      npm install firebase
+
+      Archivo lib/firebase.ts:
+        import { initializeApp } from 'firebase/app';
+        import { getMessaging, getToken, onMessage } from 'firebase/messaging';
+
+        const firebaseConfig = {
+          apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+          authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+          messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_SENDER_ID,
+          appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+        };
+
+        const app = initializeApp(firebaseConfig);
+        export const messaging = typeof window !== 'undefined' ? getMessaging(app) : null;
+
+      Crear public/firebase-messaging-sw.js (service worker):
+        importScripts('https://www.gstatic.com/firebasejs/10.x/firebase-app-compat.js');
+        importScripts('https://www.gstatic.com/firebasejs/10.x/firebase-messaging-compat.js');
+        firebase.initializeApp({ ... });
+        const messaging = firebase.messaging();
+        messaging.onBackgroundMessage((payload) => {
+          self.registration.showNotification(payload.notification.title, {
+            body: payload.notification.body,
+            icon: '/icon-192.png',
+          });
+        });
+
+  - step: 5
+    action: "Implementar registro de push notifications en hooks/usePushNotifications.ts"
+    detail: |
+      Hook usePushNotifications():
+        - Verificar si el navegador soporta Notification API
+        - Estado: permission ('default' | 'granted' | 'denied')
+
+        Función requestPermission():
+          1. Solicitar permiso: Notification.requestPermission()
+          2. Si granted:
+            a. Obtener FCM token: getToken(messaging, { vapidKey: NEXT_PUBLIC_FCM_VAPID_KEY })
+            b. Enviar token al backend: POST /api/notifications/register-device { token, platform: 'web' }
+            c. Guardar en localStorage que el registro se completó
+          3. Si denied: no volver a preguntar
+
+        Función onForegroundMessage():
+          - onMessage(messaging, (payload) => {
+              toast con el contenido de la notificación
+              incrementar unread count en el query cache
+            })
+
+      En el layout principal (o AuthGuard):
+        - Si usuario autenticado y !localStorage.pushRegistered:
+          - Mostrar banner no intrusivo: "Activa las notificaciones para recibir alertas de clima"
+          - Botón "Activar" → requestPermission()
+          - Botón "Ahora no" → ocultar banner por 7 días
+
+  - step: 6
+    action: "Crear página de configuración de notificaciones en app/(protected)/notifications/settings/page.tsx"
+    detail: |
+      Fetching: GET /api/notifications/preferences
+
+      Tabla de preferencias:
+        Filas (tipos de notificación):
+          - Confirmación de reserva
+          - Recordatorio de clase (24h antes)
+          - Recordatorio de clase (2h antes)
+          - Cancelación por clima
+          - Reembolso procesado
+          - Promoción de lista de espera
+
+        Columnas (canales):
+          - Push (toggle switch)
+          - Email (toggle switch)
+          - SMS (toggle switch, si disponible)
+
+      Cada celda: Switch component (shadcn/ui) que actualiza preferencia.
+
+      Guardar:
+        - Debounce de 500ms en cada toggle change
+        - PATCH /api/notifications/preferences { type, channel, enabled }
+        - Toast discreto: "Preferencias actualizadas"
+
+      Nota al pie: "Las notificaciones de cancelación por clima no se pueden desactivar por seguridad"
+        → El toggle de weather_cancel está siempre activo y disabled
+
+  - step: 7
+    action: "Crear store de notificaciones en stores/notifications.store.ts"
+    detail: |
+      interface NotificationState {
+        unreadCount: number
+        setUnreadCount: (count: number) => void
+        decrementUnread: () => void
+        resetUnread: () => void
+      }
+
+      Usar Zustand sin persist (el count se actualiza desde el backend).
+
+      Integrar con:
+        - NotificationBell: lee unreadCount del store
+        - usePushNotifications: incrementa al recibir push en foreground
+        - NotificationPanel onClick: decrementa al marcar como leída
+        - "Marcar todo como leído": resetea a 0
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Las notificaciones de cancelación por clima NO se pueden desactivar — son obligatorias"
+  - "El panel dropdown debe cerrarse al hacer click fuera"
+  - "Infinite scroll, no paginación manual — experiencia fluida"
+  - "Push notification registration solo tras consentimiento explícito del usuario"
+  - "No solicitar permiso de push automáticamente al cargar — esperar interacción"
+  - "El service worker de Firebase debe estar en /public/ (no en /app/)"
+  - "Unread count se refresca cada 30 segundos como fallback si no hay WebSocket"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El icono de campana muestra badge con número de notificaciones sin leer"
+  - "El panel dropdown muestra lista de notificaciones con estilos diferenciados por tipo"
+  - "Click en notificación la marca como leída y navega al recurso asociado"
+  - "Marcar todo como leído actualiza el badge y los estilos de todas las notificaciones"
+  - "Infinite scroll carga más notificaciones al llegar al final"
+  - "Push notifications se reciben en foreground con toast"
+  - "Push notifications se reciben en background con notificación del sistema"
+  - "La página de settings permite activar/desactivar canales por tipo de notificación"
+  - "Las notificaciones de weather_cancel no se pueden desactivar"
+  - "El unread count se actualiza en tiempo real al recibir push"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F3: Auth y Perfil — usuario autenticado, Navbar donde se integra el bell"
+    - "B13: Sistema de Notificaciones — endpoints CRUD de notificaciones y FCM"
+  integrates_with:
+    - "F6: Gestión de Reservas — notificaciones de booking enlazan a /my-bookings"
+    - "B11: Cancelación Automática — genera notificaciones de weather_cancel"
+    - "B12: Pagos — genera notificaciones de refund"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - NotificationBell component integrado en Navbar
+    - NotificationPanel dropdown con infinite scroll
+    - Página /notifications con lista completa y filtros
+    - Página /notifications/settings con configuración de preferencias
+    - Push notification registration con FCM (lib/firebase.ts)
+    - Hook usePushNotifications para gestión de permisos
+    - Store notificaciones Zustand con unreadCount
+    - Service worker firebase-messaging-sw.js
+
+verification: "cd frontend && npm run build && npm run lint"

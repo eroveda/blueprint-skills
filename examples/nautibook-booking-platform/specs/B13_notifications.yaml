@@ -1,0 +1,389 @@
+# ============================================================
+# SPEC B13 — Sistema de Notificaciones
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Sistema de Notificaciones"
+purpose: "Implementar sistema de notificaciones multicanal (push, email, SMS) con event listeners, reminder scheduler y preferencias de usuario"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulos implementados:
+    - Modelos de Datos (B2):
+        Tabla notifications creada con campos: id, user_id, type, channel, title, body, read, sent_at
+    - Auth (B4): JWT guard, decorador @CurrentUser(), roles (cliente|instructor|admin)
+  Eventos disponibles de otros módulos:
+    - booking.created → confirmar reserva al usuario
+    - booking.cancelled → aviso de cancelación
+    - booking.cancelled_weather → aviso de cancelación por clima + sugerencias
+    - booking.promoted_from_waitlist → aviso de promoción desde lista de espera
+    - booking.updated → aviso de modificación
+    - cancellation.suggestions_ready → alternativas de reprogramación
+    - payment.completed → confirmación de pago
+    - refund.processed → aviso de reembolso
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo en src/modules/notification/"
+    detail: |
+      Estructura de archivos:
+        src/modules/notification/
+          notification.module.ts
+          notification.service.ts
+          notification.controller.ts
+          channels/
+            push.channel.ts           // FCM
+            email.channel.ts           // SendGrid o SES
+            sms.channel.ts             // Twilio
+            channel.interface.ts       // interfaz común
+          listeners/
+            booking.listener.ts
+            payment.listener.ts
+          scheduler/
+            reminder.scheduler.ts
+          dto/
+            notification-response.dto.ts
+            user-preferences.dto.ts
+          entities/
+            notification.entity.ts
+            notification-preference.entity.ts
+          __tests__/
+            notification.service.spec.ts
+            reminder.scheduler.spec.ts
+            booking.listener.spec.ts
+            notification.integration.spec.ts
+
+  - step: 2
+    action: "Crear entidades y DTOs"
+    detail: |
+      Notification entity:
+        id: string (UUID)
+        user_id: string
+        type: NotificationType
+        channel: NotificationChannel   // push | email | sms
+        title: string
+        body: string
+        metadata: JSON                 // datos extra (booking_id, suggestions, etc.)
+        read: boolean                  // default false
+        sent_at: Date
+        created_at: Date
+
+      NotificationPreference entity:
+        id: string (UUID)
+        user_id: string
+        notification_type: NotificationType
+        push_enabled: boolean          // default true
+        email_enabled: boolean         // default true
+        sms_enabled: boolean           // default false
+        created_at: Date
+        updated_at: Date
+
+      enum NotificationType:
+        BOOKING_CONFIRMED = 'booking_confirmed'
+        WEATHER_CANCEL = 'weather_cancel'
+        REMINDER_24H = 'reminder_24h'
+        REMINDER_2H = 'reminder_2h'
+        REFUND_PROCESSED = 'refund_processed'
+        WAITLIST_PROMOTED = 'waitlist_promoted'
+        PAYMENT_CONFIRMED = 'payment_confirmed'
+
+      enum NotificationChannel:
+        PUSH = 'push'
+        EMAIL = 'email'
+        SMS = 'sms'
+
+      NotificationResponseDTO:
+        id: string
+        type: NotificationType
+        channel: NotificationChannel
+        title: string
+        body: string
+        read: boolean
+        sent_at: Date
+
+      UserPreferencesDTO:
+        notification_type: NotificationType
+        push_enabled: boolean
+        email_enabled: boolean
+        sms_enabled: boolean
+
+  - step: 3
+    action: "Implementar interfaz de canal y canales en src/modules/notification/channels/"
+    detail: |
+      channel.interface.ts:
+        interface NotificationChannelInterface {
+          send(to: string, title: string, body: string, metadata?: Record<string, any>): Promise<boolean>
+        }
+
+      push.channel.ts (FCM):
+        Inyectar ConfigService para FCM_SERVER_KEY.
+        async send(deviceToken: string, title: string, body: string, metadata?): Promise<boolean>
+          → Usar firebase-admin SDK para enviar push notification
+          → Retornar true si envío exitoso, false si fallo (token inválido, etc.)
+
+      email.channel.ts (SendGrid/SES):
+        Inyectar ConfigService para SENDGRID_API_KEY o AWS SES config.
+        async send(email: string, title: string, body: string, metadata?): Promise<boolean>
+          → Usar @sendgrid/mail o AWS SDK para enviar email
+          → Soporte para templates HTML según tipo de notificación
+          → Retornar true/false
+
+      sms.channel.ts (Twilio):
+        Inyectar ConfigService para TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER.
+        async send(phone: string, title: string, body: string, metadata?): Promise<boolean>
+          → Usar twilio SDK para enviar SMS
+          → Body concatena title + body (SMS no tiene título separado)
+          → Retornar true/false
+
+  - step: 4
+    action: "Implementar NotificationService en src/modules/notification/notification.service.ts"
+    detail: |
+      Inyectar: NotificationRepository, NotificationPreferenceRepository,
+                PushChannel, EmailChannel, SmsChannel, UserService.
+
+      async sendNotification(userId: string, type: NotificationType, title: string, body: string, metadata?: Record<string, any>): Promise<void>
+        1. Obtener preferencias del usuario para este tipo de notificación
+        2. Obtener datos del usuario (email, phone, device_token)
+        3. Para cada canal habilitado en preferencias:
+           a. Llamar al canal correspondiente (push/email/sms)
+           b. Crear registro Notification en BD con channel, sent_at
+           c. Si fallo en envío, loggear error pero no lanzar excepción
+        4. Si no hay preferencias configuradas, usar defaults:
+           - push_enabled=true, email_enabled=true, sms_enabled=false
+
+      async getNotifications(userId: string, page: number, limit: number): Promise<NotificationResponseDTO[]>
+        → Retornar notificaciones del usuario paginadas, ordenadas por sent_at DESC
+
+      async markAsRead(userId: string, notificationId: string): Promise<void>
+        1. Obtener notificación, validar pertenencia al usuario
+        2. Actualizar read=true
+
+      async getUnreadCount(userId: string): Promise<number>
+        → Contar notificaciones con read=false para el usuario
+
+      async updatePreferences(userId: string, dto: UserPreferencesDTO): Promise<void>
+        → Crear o actualizar preferencia para el tipo de notificación indicado
+
+      async getPreferences(userId: string): Promise<UserPreferencesDTO[]>
+        → Retornar todas las preferencias del usuario (con defaults para tipos sin configurar)
+
+  - step: 5
+    action: "Implementar event listeners en src/modules/notification/listeners/"
+    detail: |
+      booking.listener.ts:
+
+      @OnEvent('booking.created')
+      async handleBookingCreated(payload: { bookingId, userId, sportName, date, startTime, instructorName })
+        → Llamar NotificationService.sendNotification(
+            userId, BOOKING_CONFIRMED,
+            'Reserva confirmada',
+            `Tu clase de ${sportName} el ${date} a las ${startTime} con ${instructorName} está confirmada.`,
+            { bookingId }
+          )
+
+      @OnEvent('booking.cancelled_weather')
+      async handleWeatherCancellation(payload: { bookingId, userId, sportName, date, reason })
+        → Llamar NotificationService.sendNotification(
+            userId, WEATHER_CANCEL,
+            'Clase cancelada por meteorología',
+            `Tu clase de ${sportName} el ${date} ha sido cancelada: ${reason}. Te enviaremos alternativas.`,
+            { bookingId, reason }
+          )
+
+      @OnEvent('cancellation.suggestions_ready')
+      async handleSuggestionsReady(payload: { userId, bookingId, reason, suggestions })
+        → Llamar NotificationService.sendNotification(
+            userId, WEATHER_CANCEL,
+            'Alternativas disponibles',
+            `Hemos encontrado ${suggestions.length} alternativas para tu clase cancelada.`,
+            { bookingId, suggestions }
+          )
+
+      @OnEvent('booking.promoted_from_waitlist')
+      async handleWaitlistPromotion(payload: { bookingId, userId, sportName, date, startTime })
+        → Llamar NotificationService.sendNotification(
+            userId, WAITLIST_PROMOTED,
+            'Plaza disponible — reserva confirmada',
+            `Se ha liberado una plaza para ${sportName} el ${date} a las ${startTime}. Tu reserva está confirmada.`,
+            { bookingId }
+          )
+
+      payment.listener.ts:
+
+      @OnEvent('refund.processed')
+      async handleRefundProcessed(payload: { bookingId, userId, amount, reason })
+        → Llamar NotificationService.sendNotification(
+            userId, REFUND_PROCESSED,
+            'Reembolso procesado',
+            `Se ha procesado un reembolso de ${amount/100}€ por ${reason}.`,
+            { bookingId, amount, reason }
+          )
+
+  - step: 6
+    action: "Implementar ReminderScheduler en src/modules/notification/scheduler/reminder.scheduler.ts"
+    detail: |
+      Inyectar: BookingRepository, NotificationService.
+
+      @Cron('0 * * * *')  // cada hora
+      async sendReminders(): Promise<void>
+        1. Buscar bookings CONFIRMED cuya fecha+hora es dentro de 24h (± 30 min margen)
+           y que NO tienen notificación REMINDER_24H ya enviada
+        2. Para cada booking:
+           → Llamar NotificationService.sendNotification(
+               userId, REMINDER_24H,
+               'Recordatorio: clase mañana',
+               `Recuerda tu clase de ${sportName} mañana a las ${startTime}.`,
+               { bookingId }
+             )
+
+        3. Buscar bookings CONFIRMED cuya fecha+hora es dentro de 2h (± 15 min margen)
+           y que NO tienen notificación REMINDER_2H ya enviada
+        4. Para cada booking:
+           → Llamar NotificationService.sendNotification(
+               userId, REMINDER_2H,
+               'Tu clase empieza pronto',
+               `Tu clase de ${sportName} empieza en 2 horas. ¡Nos vemos en ${spotName}!`,
+               { bookingId }
+             )
+
+      Verificar idempotencia: no enviar reminder si ya existe uno del mismo tipo para ese booking.
+
+  - step: 7
+    action: "Implementar NotificationController en src/modules/notification/notification.controller.ts"
+    detail: |
+      @Controller('api/v1/notifications')
+
+      @Get()
+      @Roles('cliente', 'instructor')
+      async getNotifications(@CurrentUser() user, @Query('page') page: number, @Query('limit') limit: number): Promise<NotificationResponseDTO[]>
+        → Llamar NotificationService.getNotifications(user.id, page, limit)
+
+      @Patch(':id/read')
+      @Roles('cliente', 'instructor')
+      async markAsRead(@CurrentUser() user, @Param('id') id: string): Promise<void>
+        → Llamar NotificationService.markAsRead(user.id, id)
+
+      @Get('unread-count')
+      @Roles('cliente', 'instructor')
+      async getUnreadCount(@CurrentUser() user): Promise<{ count: number }>
+        → Llamar NotificationService.getUnreadCount(user.id)
+
+      @Get('preferences')
+      @Roles('cliente', 'instructor')
+      async getPreferences(@CurrentUser() user): Promise<UserPreferencesDTO[]>
+        → Llamar NotificationService.getPreferences(user.id)
+
+      @Put('preferences')
+      @Roles('cliente', 'instructor')
+      async updatePreferences(@CurrentUser() user, @Body() dto: UserPreferencesDTO): Promise<void>
+        → Llamar NotificationService.updatePreferences(user.id, dto)
+
+  - step: 8
+    action: "Escribir tests unitarios en src/modules/notification/__tests__/"
+    detail: |
+      notification.service.spec.ts:
+        - "should send notification via push when push_enabled"
+        - "should send notification via email when email_enabled"
+        - "should send notification via sms when sms_enabled"
+        - "should not send via disabled channels"
+        - "should use default preferences when none configured"
+        - "should create notification record in database"
+        - "should log error but not throw when channel fails"
+        - "should mark notification as read"
+        - "should return unread count"
+        - "should update user preferences"
+
+      booking.listener.spec.ts:
+        - "should send BOOKING_CONFIRMED on booking.created"
+        - "should send WEATHER_CANCEL on booking.cancelled_weather"
+        - "should send suggestions on cancellation.suggestions_ready"
+        - "should send WAITLIST_PROMOTED on booking.promoted_from_waitlist"
+        - "should send REFUND_PROCESSED on refund.processed"
+
+      reminder.scheduler.spec.ts:
+        - "should send 24h reminder for upcoming confirmed bookings"
+        - "should send 2h reminder for imminent confirmed bookings"
+        - "should not send duplicate reminders for same booking"
+        - "should not send reminders for cancelled bookings"
+        - "should not send reminders for past bookings"
+
+  - step: 9
+    action: "Escribir tests de integración en src/modules/notification/__tests__/notification.integration.spec.ts"
+    detail: |
+      Tests e2e:
+        - "GET /api/v1/notifications returns user notifications paginated"
+        - "PATCH /api/v1/notifications/:id/read marks notification as read"
+        - "GET /api/v1/notifications/unread-count returns correct count"
+        - "GET /api/v1/notifications/preferences returns user preferences"
+        - "PUT /api/v1/notifications/preferences updates preferences correctly"
+        - "Booking creation triggers notification delivery"
+        - "Weather cancellation triggers notification with reason"
+        - "Reminder scheduler sends 24h and 2h reminders"
+        - "User A cannot read User B notifications"
+        - "Disabled channel does not receive notification"
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Los canales de envío (FCM, SendGrid, Twilio) nunca bloquean el flujo principal — errores se loggean"
+  - "Un fallo de envío en un canal no impide el envío en otros canales"
+  - "Los reminders son idempotentes — no se envían duplicados para la misma booking"
+  - "Las preferencias por defecto son push=true, email=true, sms=false"
+  - "El usuario solo ve sus propias notificaciones"
+  - "Los templates de email son HTML con variables interpoladas"
+  - "El SMS concatena título y cuerpo en un solo mensaje"
+  - "El scheduler de reminders se ejecuta cada hora"
+  - "No se envían reminders para bookings canceladas"
+  - "Los device tokens de FCM se gestionan desde el módulo Auth (B4)"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "Evento booking.created dispara notificación de confirmación por canales habilitados"
+  - "Evento booking.cancelled_weather dispara notificación con razón de cancelación"
+  - "Evento booking.promoted_from_waitlist dispara notificación de plaza disponible"
+  - "Evento refund.processed dispara notificación de reembolso"
+  - "Reminders se envían 24h y 2h antes de cada clase confirmada"
+  - "No se envían reminders duplicados"
+  - "GET /api/v1/notifications retorna notificaciones paginadas"
+  - "PATCH /api/v1/notifications/:id/read marca como leída"
+  - "GET /api/v1/notifications/unread-count retorna conteo correcto"
+  - "Las preferencias de usuario se respetan en cada envío"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B2: Modelos de Datos — tabla notifications"
+    - "B4: Auth y Roles — JWT guard, @CurrentUser(), @Roles(), device tokens"
+  integrates_with:
+    - "B10: Reservas — consume eventos booking.created, booking.cancelled, booking.promoted_from_waitlist"
+    - "B11: Cancelación Automática — consume eventos booking.cancelled_weather, cancellation.suggestions_ready"
+    - "B12: Pagos — consume evento refund.processed"
+  external:
+    - "Firebase Cloud Messaging (FCM) — push notifications"
+    - "SendGrid o AWS SES — email"
+    - "Twilio — SMS"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - GET /api/v1/notifications → frontend centro de notificaciones
+    - PATCH /api/v1/notifications/:id/read → frontend marcar como leída
+    - GET /api/v1/notifications/unread-count → frontend badge de notificaciones
+    - GET /api/v1/notifications/preferences → frontend configuración
+    - PUT /api/v1/notifications/preferences → frontend guardar preferencias
+    - NotificationService.sendNotification() → invocable desde cualquier módulo
+    - Tabla notifications con histórico → para B14 reportes
+    - Reminder scheduler activo → envía reminders automáticamente
+
+verification: "npm test -- --testPathPattern=notification"

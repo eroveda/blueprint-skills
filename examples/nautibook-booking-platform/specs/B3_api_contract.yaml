@@ -1,0 +1,537 @@
+# ============================================================
+# SPEC B3 — Contrato API (OpenAPI/Swagger)
+# NautiBook — Reserva de Deportes Nauticos
+# ============================================================
+
+title: "Contrato API (OpenAPI/Swagger)"
+purpose: "Definir y documentar todos los endpoints REST con sus schemas de request/response, codigos de error y documentacion OpenAPI accesible en /api/docs"
+category: "DESIGN"
+
+input_context: |
+  Proyecto NestJS inicializado (B1) con modelos de datos definidos (B2).
+  Todas las entidades TypeORM creadas: User, School, Sport, WeatherThreshold,
+  Instructor, Schedule, Booking, WeatherData, WeatherDecisionLog, Payment,
+  CreditPack, Notification, Spot.
+  Se necesita definir el contrato API antes de implementar los modulos,
+  para que frontend y backend puedan trabajar en paralelo.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACION
+# ============================================================
+instructions:
+  - step: 1
+    action: "Instalar y configurar @nestjs/swagger"
+    detail: |
+      Instalar:
+        npm install @nestjs/swagger swagger-ui-express
+
+      Configurar en main.ts:
+        const config = new DocumentBuilder()
+          .setTitle('NautiBook API')
+          .setDescription('API de reservas de deportes nauticos con integracion meteorologica marina')
+          .setVersion('1.0.0')
+          .addBearerAuth({
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+            description: 'Token JWT de acceso',
+          })
+          .addTag('auth', 'Autenticacion y registro de usuarios')
+          .addTag('schools', 'Gestion de escuelas nauticas')
+          .addTag('spots', 'Ubicaciones/spots de practica')
+          .addTag('sports', 'Catalogo de deportes y umbrales meteorologicos')
+          .addTag('instructors', 'Gestion de instructores')
+          .addTag('schedules', 'Horarios y disponibilidad')
+          .addTag('weather', 'Datos meteorologicos marinos')
+          .addTag('weather-decision', 'Motor de decision climatica')
+          .addTag('bookings', 'Sistema de reservas')
+          .addTag('payments', 'Pagos, reembolsos y bonos')
+          .addTag('notifications', 'Notificaciones multicanal')
+          .addTag('reports', 'Reportes y metricas admin')
+          .build();
+
+        const document = SwaggerModule.createDocument(app, config);
+        SwaggerModule.setup('api/docs', app, document, {
+          swaggerOptions: {
+            persistAuthorization: true,
+            tagsSorter: 'alpha',
+            operationsSorter: 'alpha',
+          },
+        });
+
+  - step: 2
+    action: "Crear DTOs compartidos en src/common/dto/"
+    detail: |
+      src/common/dto/pagination.dto.ts:
+        export class PaginationQueryDto {
+          @ApiPropertyOptional({ default: 1, minimum: 1 })
+          @IsOptional() @IsInt() @Min(1)
+          page?: number = 1;
+
+          @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+          @IsOptional() @IsInt() @Min(1) @Max(100)
+          limit?: number = 20;
+        }
+
+        export class PaginatedResponseDto<T> {
+          @ApiProperty() data: T[];
+          @ApiProperty() total: number;
+          @ApiProperty() page: number;
+          @ApiProperty() limit: number;
+          @ApiProperty() totalPages: number;
+        }
+
+      src/common/dto/error-response.dto.ts:
+        export class ErrorResponseDto {
+          @ApiProperty({ example: 400 })
+          statusCode: number;
+
+          @ApiProperty({ example: 'Validation failed' })
+          message: string | string[];
+
+          @ApiProperty({ example: 'Bad Request' })
+          error: string;
+
+          @ApiProperty({ example: '2025-01-15T10:30:00Z' })
+          timestamp: string;
+
+          @ApiProperty({ example: '/api/bookings' })
+          path: string;
+        }
+
+  - step: 3
+    action: "Definir DTOs y esquema para el grupo AUTH"
+    detail: |
+      src/modules/auth/dto/:
+
+      register.dto.ts:
+        POST /api/auth/register
+        Body: { email, password, name, phone? }
+        Response 201: { user: { id, email, name, role }, accessToken, refreshToken }
+        Response 409: { error: "Email already registered" }
+
+      login.dto.ts:
+        POST /api/auth/login
+        Body: { email, password }
+        Response 200: { user: { id, email, name, role }, accessToken, refreshToken }
+        Response 401: { error: "Invalid credentials" }
+
+      oauth-login.dto.ts:
+        POST /api/auth/oauth
+        Body: { provider: 'google' | 'apple', token: string }
+        Response 200: { user, accessToken, refreshToken }
+
+      refresh-token.dto.ts:
+        POST /api/auth/refresh
+        Body: { refreshToken }
+        Response 200: { accessToken, refreshToken }
+        Response 401: { error: "Invalid or expired refresh token" }
+
+      password-reset-request.dto.ts:
+        POST /api/auth/password-reset
+        Body: { email }
+        Response 200: { message: "Password reset email sent" }
+
+      password-reset-confirm.dto.ts:
+        POST /api/auth/password-reset/confirm
+        Body: { token, newPassword }
+        Response 200: { message: "Password updated successfully" }
+
+      profile.dto.ts:
+        GET /api/auth/profile (auth required)
+        Response 200: { id, email, name, phone, role, avatarUrl, createdAt }
+
+        PATCH /api/auth/profile (auth required)
+        Body: { name?, phone?, avatarUrl? }
+        Response 200: updated user
+
+      GDPR:
+        GET /api/auth/data-export (auth required)
+        Response 200: { user, bookings, payments, notifications } (JSON completo)
+
+        DELETE /api/auth/account (auth required)
+        Response 200: { message: "Account scheduled for deletion" }
+
+  - step: 4
+    action: "Definir DTOs y esquema para el grupo SCHOOLS"
+    detail: |
+      src/modules/schools/dto/:
+
+      GET /api/schools
+        Query: { page?, limit?, search? }
+        Response 200: PaginatedResponse<SchoolDto>
+
+      GET /api/schools/:id
+        Response 200: SchoolDto (con sports[], spots[], instructors[])
+        Response 404: { error: "School not found" }
+
+      POST /api/schools (admin)
+        Body: { name, description?, locationLat, locationLng, address?, timezone?, contactEmail?, contactPhone? }
+        Response 201: SchoolDto
+
+      PATCH /api/schools/:id (admin)
+        Body: partial SchoolDto
+        Response 200: SchoolDto
+
+      DELETE /api/schools/:id (admin)
+        Response 204: no content
+        Response 409: { error: "Cannot delete school with active bookings" }
+
+  - step: 5
+    action: "Definir DTOs y esquema para el grupo SPOTS"
+    detail: |
+      src/modules/spots/dto/:
+
+      GET /api/schools/:schoolId/spots
+        Response 200: SpotDto[]
+
+      GET /api/spots/:id
+        Response 200: SpotDto (con datos meteorologicos actuales si disponibles)
+        Response 404: { error: "Spot not found" }
+
+      POST /api/schools/:schoolId/spots (admin)
+        Body: { name, lat, lng, description?, weatherStationRef? }
+        Response 201: SpotDto
+
+      PATCH /api/spots/:id (admin)
+        Body: partial SpotDto
+        Response 200: SpotDto
+
+      DELETE /api/spots/:id (admin)
+        Response 204: no content
+
+  - step: 6
+    action: "Definir DTOs y esquema para el grupo SPORTS"
+    detail: |
+      src/modules/sports/dto/:
+
+      GET /api/schools/:schoolId/sports
+        Query: { level?, active? }
+        Response 200: SportDto[]
+
+      GET /api/sports/:id
+        Response 200: SportDto (con weatherThresholds[])
+        Response 404: { error: "Sport not found" }
+
+      POST /api/schools/:schoolId/sports (admin)
+        Body: { name, description?, level, maxParticipants, durationMinutes, price }
+        Response 201: SportDto
+
+      PATCH /api/sports/:id (admin)
+        Body: partial SportDto
+        Response 200: SportDto
+
+      POST /api/sports/:sportId/thresholds (admin)
+        Body: { maxWindSpeedKt?, maxWaveHeightM?, minWaterTempC?, maxWavePeriodS?, conditionsJson?, action }
+        Response 201: WeatherThresholdDto
+
+      PATCH /api/sports/thresholds/:id (admin)
+        Body: partial WeatherThresholdDto
+        Response 200: WeatherThresholdDto
+
+  - step: 7
+    action: "Definir DTOs y esquema para el grupo INSTRUCTORS"
+    detail: |
+      src/modules/instructors/dto/:
+
+      GET /api/schools/:schoolId/instructors
+        Query: { sportId?, active? }
+        Response 200: InstructorDto[]
+
+      GET /api/instructors/:id
+        Response 200: InstructorDto (con sports[], schedules[])
+
+      POST /api/schools/:schoolId/instructors (admin)
+        Body: { userId, bio?, certifications?, sportIds[] }
+        Response 201: InstructorDto
+
+      PATCH /api/instructors/:id (admin, instructor propio)
+        Body: { bio?, certifications?, sportIds?, active? }
+        Response 200: InstructorDto
+
+  - step: 8
+    action: "Definir DTOs y esquema para el grupo SCHEDULES"
+    detail: |
+      src/modules/schedules/dto/:
+
+      GET /api/instructors/:instructorId/schedules
+        Query: { from?, to? }
+        Response 200: ScheduleDto[]
+
+      GET /api/schedules/available
+        Query: { schoolId, sportId?, date, spotId? }
+        Response 200: AvailableSlotDto[] (con estado meteorologico: green/yellow/red)
+
+      POST /api/instructors/:instructorId/schedules (admin, instructor propio)
+        Body: { sportId, spotId?, dayOfWeek, startTime, endTime, recurring?, validFrom, validUntil? }
+        Response 201: ScheduleDto
+
+      PATCH /api/schedules/:id (admin, instructor propio)
+        Body: partial ScheduleDto
+        Response 200: ScheduleDto
+
+      DELETE /api/schedules/:id (admin, instructor propio)
+        Response 204: no content
+
+  - step: 9
+    action: "Definir DTOs y esquema para el grupo WEATHER"
+    detail: |
+      src/modules/weather/dto/:
+
+      GET /api/weather/:spotId
+        Response 200: WeatherDataDto (condiciones actuales)
+        Response 404: { error: "No weather data available for this spot" }
+
+      GET /api/weather/:spotId/forecast
+        Response 200: { spotId, forecast: WeatherDataDto[], fetchedAt }
+
+      Todos los endpoints de weather requieren autenticacion JWT.
+
+  - step: 10
+    action: "Definir DTOs y esquema para el grupo WEATHER-DECISION"
+    detail: |
+      src/modules/weather-decision/dto/:
+
+      GET /api/weather-decision/evaluate
+        Query: { sportId, spotId, date, startTime }
+        Response 200: { decision: 'approved'|'warning'|'cancelled', reason, weatherData, thresholds }
+
+      GET /api/weather-decision/logs
+        Query: { bookingId?, sportId?, from?, to?, decision?, page?, limit? }
+        Response 200: PaginatedResponse<WeatherDecisionLogDto>
+
+  - step: 11
+    action: "Definir DTOs y esquema para el grupo BOOKINGS"
+    detail: |
+      src/modules/bookings/dto/:
+
+      GET /api/bookings
+        Query: { status?, from?, to?, page?, limit? }
+        Response 200: PaginatedResponse<BookingDto>
+        (filtrado por user_id del JWT para clientes, todos para admin)
+
+      GET /api/bookings/:id
+        Response 200: BookingDto (con instructor, sport, schedule, payments, weatherDecisions)
+
+      POST /api/bookings
+        Body: { scheduleId, date, participants? }
+        Response 201: BookingDto
+        Response 400: { error: "No availability for this slot" }
+        Response 400: { error: "Weather conditions not suitable" }
+        Response 409: { error: "You already have a booking for this slot" }
+
+      PATCH /api/bookings/:id/cancel
+        Body: { reason? }
+        Response 200: BookingDto (status: cancelled_user)
+        Response 400: { error: "Cannot cancel a completed booking" }
+
+      GET /api/bookings/instructor
+        Query: { date?, status?, page?, limit? }
+        Response 200: PaginatedResponse<BookingDto>
+        (filtrado por instructor_id del JWT)
+
+  - step: 12
+    action: "Definir DTOs y esquema para el grupo PAYMENTS"
+    detail: |
+      src/modules/payments/dto/:
+
+      POST /api/payments/create-intent
+        Body: { bookingId }
+        Response 200: { clientSecret, paymentIntentId }
+        (Stripe PaymentIntent)
+
+      POST /api/payments/webhook
+        (Stripe webhook — sin autenticacion JWT, verificacion por signature)
+        Response 200: { received: true }
+
+      GET /api/payments
+        Query: { status?, from?, to?, page?, limit? }
+        Response 200: PaginatedResponse<PaymentDto>
+
+      POST /api/payments/refund
+        Body: { paymentId, reason? }
+        Response 200: PaymentDto (status: refunded)
+
+      --- Credit Packs ---
+
+      GET /api/credit-packs
+        Response 200: CreditPackDto[] (packs del usuario autenticado)
+
+      POST /api/credit-packs/purchase
+        Body: { schoolId, sportId?, credits, amount }
+        Response 201: CreditPackDto
+
+  - step: 13
+    action: "Definir DTOs y esquema para el grupo NOTIFICATIONS"
+    detail: |
+      src/modules/notifications/dto/:
+
+      GET /api/notifications
+        Query: { read?, type?, page?, limit? }
+        Response 200: PaginatedResponse<NotificationDto>
+
+      PATCH /api/notifications/:id/read
+        Response 200: NotificationDto (read: true)
+
+      PATCH /api/notifications/read-all
+        Response 200: { updated: number }
+
+      GET /api/notifications/unread-count
+        Response 200: { count: number }
+
+  - step: 14
+    action: "Definir DTOs y esquema para el grupo REPORTS"
+    detail: |
+      src/modules/reports/dto/:
+
+      GET /api/reports/occupancy
+        Query: { schoolId, sportId?, from, to }
+        Response 200: { occupancyRate, totalSlots, bookedSlots, byDay[] }
+
+      GET /api/reports/cancellations
+        Query: { schoolId, from, to }
+        Response 200: { total, byWeather, byUser, bySport[], byMonth[] }
+
+      GET /api/reports/revenue
+        Query: { schoolId, from, to }
+        Response 200: { totalRevenue, totalRefunds, netRevenue, bySport[], byMonth[] }
+
+      GET /api/reports/weather-reliability
+        Query: { schoolId, spotId?, from, to }
+        Response 200: { totalDecisions, approved, warnings, cancelled, reliabilityRate }
+
+      Todos los endpoints de reports requieren rol admin.
+
+  - step: 15
+    action: "Documentar codigos de error globales"
+    detail: |
+      Crear src/common/constants/error-codes.ts:
+
+      export const ERROR_CODES = {
+        // Auth (401, 403)
+        INVALID_CREDENTIALS: 'AUTH_001',
+        TOKEN_EXPIRED: 'AUTH_002',
+        INVALID_REFRESH_TOKEN: 'AUTH_003',
+        INSUFFICIENT_PERMISSIONS: 'AUTH_004',
+        ACCOUNT_DISABLED: 'AUTH_005',
+
+        // Validation (400)
+        VALIDATION_FAILED: 'VAL_001',
+        INVALID_DATE_RANGE: 'VAL_002',
+
+        // Resources (404, 409)
+        SCHOOL_NOT_FOUND: 'RES_001',
+        SPORT_NOT_FOUND: 'RES_002',
+        SPOT_NOT_FOUND: 'RES_003',
+        INSTRUCTOR_NOT_FOUND: 'RES_004',
+        SCHEDULE_NOT_FOUND: 'RES_005',
+        BOOKING_NOT_FOUND: 'RES_006',
+        PAYMENT_NOT_FOUND: 'RES_007',
+
+        // Business Logic (400, 409)
+        NO_AVAILABILITY: 'BIZ_001',
+        WEATHER_NOT_SUITABLE: 'BIZ_002',
+        DUPLICATE_BOOKING: 'BIZ_003',
+        CANNOT_CANCEL_COMPLETED: 'BIZ_004',
+        INSUFFICIENT_CREDITS: 'BIZ_005',
+        PACK_EXPIRED: 'BIZ_006',
+
+        // Weather (502, 503)
+        WEATHER_API_UNAVAILABLE: 'WTH_001',
+        NO_WEATHER_DATA: 'WTH_002',
+
+        // Rate Limiting (429)
+        RATE_LIMIT_EXCEEDED: 'RATE_001',
+      };
+
+      Incluir estos codigos en los @ApiResponse() de cada endpoint.
+
+  - step: 16
+    action: "Escribir tests de validacion del contrato API"
+    detail: |
+      Crear src/modules/api-contract/__tests__/swagger.spec.ts:
+
+      Tests:
+        - "should generate valid OpenAPI 3.0 document"
+        - "should include all 12 tag groups"
+        - "should have Bearer auth security scheme defined"
+        - "all POST endpoints should have request body schema"
+        - "all endpoints should have at least one error response documented"
+        - "pagination endpoints should use PaginatedResponseDto"
+        - "auth endpoints should not require Bearer token (except profile)"
+        - "admin endpoints should document 403 response"
+
+      Usar SwaggerModule.createDocument() en el test para generar
+      el documento y validar su estructura programaticamente.
+
+  - step: 17
+    action: "Exportar especificacion OpenAPI como archivo JSON"
+    detail: |
+      Agregar script en package.json:
+        "swagger:export": "ts-node scripts/export-swagger.ts"
+
+      Crear scripts/export-swagger.ts:
+        - Inicializar NestFactory.create(AppModule) sin listen
+        - Generar documento con SwaggerModule.createDocument()
+        - Escribir a openapi.json en la raiz del proyecto
+        - Loggear: "OpenAPI spec exported to openapi.json"
+
+      Este archivo puede usarse para generar clientes frontend automaticamente.
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Todos los endpoints deben usar el prefijo /api/"
+  - "Todos los DTOs deben tener decoradores @ApiProperty() con ejemplos"
+  - "Todos los endpoints protegidos deben usar @ApiBearerAuth()"
+  - "Todos los endpoints deben documentar al menos las respuestas 200/201, 400, 401, 404 segun aplique"
+  - "Los DTOs de request deben tener validacion con class-validator"
+  - "No exponer campos sensibles en los DTOs de respuesta (password_hash, refresh_token)"
+  - "Usar versionado implicito en la URL (sin /v1/ por ahora, se agregara cuando sea necesario)"
+  - "El contrato debe ser compatible con la generacion automatica de clientes (openapi-generator)"
+  - "Documentar rate limits en los headers de respuesta donde aplique"
+
+# ============================================================
+# CRITERIOS DE ACEPTACION
+# ============================================================
+acceptance_criteria:
+  - "GET /api/docs muestra la interfaz Swagger UI correctamente"
+  - "El documento OpenAPI generado es valido segun el estandar OpenAPI 3.0"
+  - "Los 12 grupos de tags estan presentes: auth, schools, spots, sports, instructors, schedules, weather, weather-decision, bookings, payments, notifications, reports"
+  - "Todos los endpoints tienen schemas de request y response documentados"
+  - "Los codigos de error estan documentados con ERROR_CODES"
+  - "Los DTOs de respuesta no incluyen campos sensibles (password_hash, refresh_token)"
+  - "El script swagger:export genera un archivo openapi.json valido"
+  - "Los tests de validacion del contrato pasan"
+  - "Las respuestas paginadas usan el formato estandar PaginatedResponseDto"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — proyecto NestJS configurado"
+    - "B2: Modelos de Datos — entidades definidas para crear DTOs"
+  integrates_with:
+    - "B4: Auth — endpoints de autenticacion"
+    - "B5-B14: Todos los modulos de construccion — implementan los endpoints aqui definidos"
+    - "F1: Frontend Bootstrap — consume el contrato para generar cliente API"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Swagger UI accesible en /api/docs con documentacion completa
+    - DTOs de request con validacion class-validator para cada endpoint
+    - DTOs de response con @ApiProperty() para generacion de docs
+    - PaginationQueryDto y PaginatedResponseDto reutilizables
+    - ErrorResponseDto con formato estandar de errores
+    - ERROR_CODES constantes para codigos de error consistentes
+    - Archivo openapi.json exportable para generacion de clientes
+    - Contrato definido para los 12 grupos de endpoints:
+      auth, schools, spots, sports, instructors, schedules,
+      weather, weather-decision, bookings, payments, notifications, reports
+
+verification: "npm run build && npm test -- --testPathPattern=swagger && npm run swagger:export"

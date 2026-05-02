@@ -1,0 +1,292 @@
+# ============================================================
+# SPEC F4 — Buscador de Clases y Dashboard Meteorológico
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Buscador de Clases y Dashboard Meteorológico"
+purpose: "Implementar la página principal con buscador de clases, resultados con semáforo meteorológico, vista de mapa con spots coloreados por clima, y widgets de condiciones meteorológicas actuales y previsión"
+category: "CONSTRUCTION"
+
+input_context: |
+  Componentes de Design System implementados (F2):
+    - WeatherSemaphore, WeatherWidget, WeatherForecastMini
+    - SportCard, SpotMap, CalendarPicker, TimeSlotPicker
+    - Navbar, Footer, MobileBottomNav
+  API client configurado con interceptores JWT (F1).
+  Backend operativo con endpoints:
+    - GET /api/classes?sport=&date=&spotId=&level= (B10)
+    - GET /api/weather/:spotId (B8)
+    - GET /api/weather/:spotId/forecast (B8)
+    - GET /api/spots (B5)
+    - GET /api/sports (B6)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear página home con hero y buscador en app/page.tsx"
+    detail: |
+      Sección Hero:
+        - Background: gradiente ocean-700 a ocean-500 con overlay de imagen náutica
+        - Título grande: "Reserva tu próxima aventura náutica"
+        - Subtítulo: "Clases de vela, surf, kayak y más con condiciones meteorológicas en tiempo real"
+
+      Search Form (componente SearchForm):
+        - Card flotante sobre el hero con shadow-xl
+        - Campos en fila (mobile: stack vertical):
+          1. Select "Deporte": opciones cargadas desde GET /api/sports
+          2. DatePicker "Fecha": CalendarPicker inline o popover
+          3. Select "Ubicación": opciones cargadas desde GET /api/spots
+          4. Botón "Buscar" (ocean-500, icon Search)
+        - onSubmit: navegar a /classes?sport={}&date={}&spotId={}
+
+      Sección inferior del home:
+        - Grid de SportCards (deportes destacados)
+        - Sección "Spots populares" con mapa miniatura (SpotMap)
+        - CTA "Ver todas las clases disponibles" → /classes
+
+  - step: 2
+    action: "Crear página de resultados en app/classes/page.tsx"
+    detail: |
+      Layout dos columnas (mobile: stack):
+
+      Columna izquierda — Filtros (Sidebar / Sheet en mobile):
+        Componente ClassFilters:
+          - Select deporte (multi-select o checkboxes)
+          - Select nivel (principiante, intermedio, avanzado)
+          - DateRangePicker (fecha desde / hasta)
+          - Select spot/ubicación
+          - Botón "Aplicar filtros"
+          - Botón "Limpiar filtros"
+        Los filtros se sincronizan con query params de la URL (useSearchParams).
+
+      Columna derecha — Resultados:
+        - Header: "X clases encontradas" + toggle vista lista/mapa
+        - Lista de ClassCard components (ver step 3)
+        - Paginación o infinite scroll
+        - Empty state: "No se encontraron clases para estos criterios"
+        - Loading state: skeleton cards (3-4 skeletons)
+        - Error state: mensaje con botón reintentar
+
+      Fetching:
+        - useQuery: GET /api/classes con query params de filtros
+        - Re-fetch automático al cambiar filtros
+        - staleTime: 30000 (30 segundos)
+
+  - step: 3
+    action: "Crear componente ClassCard en components/class/ClassCard.tsx"
+    detail: |
+      Props: classItem: ClassAvailabilityDTO, onClick?: () => void
+
+      ClassAvailabilityDTO (del backend):
+        id, sport: { name, level, icon }, instructor: { name, avatar },
+        spot: { name, id }, date, start_time, end_time,
+        available_spots, max_participants, price,
+        weather_status: 'APPROVED' | 'WARNING' | 'CANCELLED',
+        weather_summary: { wind_kt, wave_m, temp_c }
+
+      Layout de la card:
+        - Izquierda: icono deporte + WeatherSemaphore (prominente, tamaño md)
+        - Centro:
+          - Deporte nombre + nivel badge
+          - Fecha y hora
+          - Instructor nombre + avatar mini
+          - Spot nombre
+          - "{available_spots} plazas disponibles" (o "Completo" + waitlist link)
+        - Derecha:
+          - PriceTag con precio
+          - Weather mini-summary: viento + olas (iconos pequeños)
+          - Botón "Reservar" (o "Lista de espera" si completo)
+
+      Estados especiales:
+        - weather_status === 'CANCELLED':
+          - Card con borde rojo, fondo rojo-50
+          - Botón disabled: "Cancelado por clima"
+          - Texto: "Condiciones no aptas — ver alternativas"
+        - weather_status === 'WARNING':
+          - Card con borde amarillo, banner amarillo arriba
+          - Botón activo pero con texto: "Reservar (precaución)"
+
+      onClick: navegar a /classes/{id} (detalle de clase)
+
+  - step: 4
+    action: "Crear vista de mapa en app/classes/page.tsx (toggle)"
+    detail: |
+      Componente ClassMapView:
+        - SpotMap a pantalla completa de la columna de resultados
+        - Markers coloreados por el peor weather_status de las clases en ese spot
+        - Cluster markers si hay muchos spots cercanos
+        - Popup al click en marker:
+          - Nombre del spot
+          - WeatherSemaphore actual
+          - Mini resumen clima (viento, olas)
+          - Lista de clases en ese spot (máx 3) con link "Ver todas"
+          - Botón "Ver clases en este spot" → aplica filtro spotId
+
+      Toggle lista/mapa:
+        - Botones en el header de resultados: List icon / Map icon
+        - Persiste en query param: view=list | view=map
+        - En mobile: toggle con animación slide
+
+  - step: 5
+    action: "Crear componente WeatherDashboard para cada spot en components/weather/WeatherDashboard.tsx"
+    detail: |
+      Props: spotId: string, spotName: string
+
+      Renderizado (panel expandible en la lista de resultados o standalone):
+        - Título: "Condiciones en {spotName}"
+        - WeatherSemaphore (tamaño lg, prominente)
+        - Grid 2x2 (mobile: stack):
+          - Card Viento: icono Wind, valor en kt, dirección con flecha rotada
+          - Card Oleaje: icono Waves, altura en m, periodo en s
+          - Card Temp. Aire: icono Thermometer, valor en °C
+          - Card Temp. Agua: icono Droplets, valor en °C (o "N/D")
+        - WeatherForecastMini (previsión 7 días como mini timeline)
+        - Texto "Última actualización: hace X minutos" (calculado desde fetched_at)
+
+      Fetching:
+        - useQuery: GET /api/weather/{spotId}
+        - useQuery: GET /api/weather/{spotId}/forecast
+        - Auto-refetch cada 5 minutos
+        - Skeleton loading para cada card
+
+  - step: 6
+    action: "Crear página de detalle de clase en app/classes/[id]/page.tsx"
+    detail: |
+      Fetching: useQuery GET /api/classes/{id}
+
+      Layout:
+        - Header con sport name + nivel badge + WeatherSemaphore grande
+        - Grid dos columnas:
+
+        Columna izquierda:
+          - Sección "Instructor":
+            - InstructorCard (tamaño normal, con bio)
+          - Sección "Deporte":
+            - Descripción del deporte
+            - Duración, nivel, máximo participantes
+          - Sección "Ubicación":
+            - SpotMap con un solo marker (el spot de esta clase)
+            - Dirección / coordenadas
+
+        Columna derecha:
+          - Card de reserva (sticky):
+            - Fecha y hora
+            - PriceTag prominente
+            - Plazas disponibles: "{available}/{max}"
+            - WeatherDashboard (compacto) del spot
+            - Selector de participantes (stepper 1-max)
+            - Botón "Reservar" → navegar a flujo de reserva (F5)
+            - Si CANCELLED: botón disabled + "Ver alternativas" link
+            - Si WARNING: banner amarillo + botón activo
+
+        Columna derecha — "Condiciones Meteorológicas":
+          - WeatherDashboard completo del spot
+
+      Si la clase no existe: 404 page
+
+  - step: 7
+    action: "Crear hooks de datos en hooks/"
+    detail: |
+      Archivo hooks/useClasses.ts:
+        export function useClasses(filters: ClassFilters) {
+          return useQuery({
+            queryKey: ['classes', filters],
+            queryFn: () => apiClient.get('/classes', { params: filters }),
+            staleTime: 30000,
+          });
+        }
+
+      Archivo hooks/useWeather.ts:
+        export function useCurrentWeather(spotId: string) {
+          return useQuery({
+            queryKey: ['weather', 'current', spotId],
+            queryFn: () => apiClient.get(`/weather/${spotId}`),
+            staleTime: 60000,
+            refetchInterval: 300000, // re-fetch cada 5 min
+          });
+        }
+
+        export function useWeatherForecast(spotId: string) {
+          return useQuery({
+            queryKey: ['weather', 'forecast', spotId],
+            queryFn: () => apiClient.get(`/weather/${spotId}/forecast`),
+            staleTime: 300000,
+          });
+        }
+
+      Archivo hooks/useSpots.ts:
+        export function useSpots() {
+          return useQuery({
+            queryKey: ['spots'],
+            queryFn: () => apiClient.get('/spots'),
+            staleTime: 600000, // 10 min
+          });
+        }
+
+      Archivo hooks/useSports.ts:
+        export function useSports() {
+          return useQuery({
+            queryKey: ['sports'],
+            queryFn: () => apiClient.get('/sports'),
+            staleTime: 600000,
+          });
+        }
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "El semáforo meteorológico debe ser PROMINENTE en cada card de clase — nunca oculto o secundario"
+  - "Los filtros se sincronizan con URL query params — compartir URL conserva la búsqueda"
+  - "No cargar el mapa (Leaflet) hasta que el usuario active la vista de mapa (lazy load)"
+  - "Weather data se auto-refresca cada 5 minutos — el usuario siempre ve datos actualizados"
+  - "Empty state y error state deben ser informativos y ofrecer acción (limpiar filtros, reintentar)"
+  - "Las clases con status CANCELLED deben ser visibles pero claramente marcadas como no reservables"
+  - "Skeleton loading en todos los estados de carga — no spinners aislados"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "La home muestra hero con buscador funcional que redirige a /classes con filtros"
+  - "La página /classes muestra lista de clases con WeatherSemaphore en cada card"
+  - "Los filtros (deporte, nivel, fecha, spot) filtran correctamente los resultados"
+  - "Los filtros se reflejan en la URL y se restauran al cargar la página con query params"
+  - "La vista de mapa muestra markers coloreados por weather status con popups informativos"
+  - "El WeatherDashboard muestra viento, oleaje, temperatura y previsión 7 días por spot"
+  - "Las clases CANCELLED muestran card con borde rojo y botón de reserva deshabilitado"
+  - "Las clases WARNING muestran banner de precaución amarillo"
+  - "La página de detalle de clase muestra toda la información con WeatherDashboard completo"
+  - "Skeleton loading se muestra mientras se cargan datos"
+  - "Los datos meteorológicos se refrescan automáticamente cada 5 minutos"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F2: Design System — WeatherSemaphore, SportCard, SpotMap, CalendarPicker y layouts"
+    - "B8: Motor de Integración Meteorológica — endpoints GET /api/weather/:spotId"
+    - "B9: Motor de Decisión Climática — weather_status en los resultados de búsqueda"
+    - "B10: Sistema de Reservas — endpoint GET /api/classes con disponibilidad"
+  integrates_with:
+    - "F5: Flujo de Reserva — la card de clase enlaza al flujo de booking"
+    - "B5: Gestión de Spots — endpoint GET /api/spots"
+    - "B6: Catálogo de Deportes — endpoint GET /api/sports"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Página home con buscador funcional (app/page.tsx)
+    - Página de resultados /classes con filtros, lista y mapa (app/classes/page.tsx)
+    - Página de detalle /classes/[id] con info completa y WeatherDashboard
+    - ClassCard component reutilizable (components/class/ClassCard.tsx)
+    - WeatherDashboard component (components/weather/WeatherDashboard.tsx)
+    - Hooks: useClasses, useCurrentWeather, useWeatherForecast, useSpots, useSports
+    - Filtros sincronizados con URL query params
+
+verification: "cd frontend && npm run build && npm run lint"

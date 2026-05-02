@@ -1,0 +1,484 @@
+# ============================================================
+# SPEC F10 — Tests E2E del Frontend
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Tests E2E del Frontend"
+purpose: "Implementar tests end-to-end con Playwright para flujos críticos, tests de componentes del semáforo meteorológico y booking, tests de accesibilidad WCAG 2.1 AA, y tests en viewport mobile con API mockeada mediante MSW"
+category: "TESTING"
+
+input_context: |
+  Frontend completo con todas las páginas implementadas:
+    - F4: Buscador de clases y dashboard meteorológico
+    - F5: Flujo de reserva y pago
+    - F6: Gestión de reservas del usuario
+    - F9: Panel de administración
+  Componentes implementados: WeatherSemaphore, BookingCard, CalendarPicker.
+  API client configurado con NEXT_PUBLIC_API_URL.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Instalar y configurar Playwright y MSW"
+    detail: |
+      Instalar Playwright:
+        npm install -D @playwright/test
+        npx playwright install --with-deps chromium firefox webkit
+
+      Configurar playwright.config.ts:
+        import { defineConfig } from '@playwright/test';
+        export default defineConfig({
+          testDir: './e2e',
+          timeout: 30000,
+          retries: 1,
+          use: {
+            baseURL: 'http://localhost:3001',
+            screenshot: 'only-on-failure',
+            video: 'retain-on-failure',
+            trace: 'retain-on-failure',
+          },
+          projects: [
+            { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+            { name: 'mobile-chrome', use: { ...devices['Pixel 7'] } },
+            { name: 'mobile-safari', use: { ...devices['iPhone 14'] } },
+          ],
+          webServer: {
+            command: 'npm run dev',
+            port: 3001,
+            reuseExistingServer: !process.env.CI,
+          },
+        });
+
+      Instalar MSW:
+        npm install -D msw
+
+      Crear e2e/mocks/handlers.ts:
+        - Definir handlers para todas las rutas de la API:
+          - GET /api/classes → mock response con clases y weather status
+          - POST /api/bookings → mock response con booking confirmado
+          - POST /api/payments → mock response con payment succeeded
+          - GET /api/weather/:spotId → mock con weather data
+          - GET /api/users/me/bookings → mock con bookings del usuario
+          - GET /api/admin/dashboard/kpis → mock con KPIs
+          - GET /api/notifications → mock con notificaciones
+          - POST /api/auth/login → mock con tokens
+
+      Crear e2e/mocks/server.ts:
+        - Configurar setupServer con handlers
+        - beforeAll: server.listen()
+        - afterEach: server.resetHandlers()
+        - afterAll: server.close()
+
+  - step: 2
+    action: "Crear helpers y fixtures en e2e/helpers/"
+    detail: |
+      Archivo e2e/helpers/auth.helper.ts:
+        async function loginAsClient(page: Page) {
+          await page.goto('/login');
+          await page.fill('[name="email"]', 'test@example.com');
+          await page.fill('[name="password"]', 'TestPass123');
+          await page.click('button[type="submit"]');
+          await page.waitForURL('/');
+        }
+
+        async function loginAsAdmin(page: Page) { ... }
+        async function loginAsInstructor(page: Page) { ... }
+
+      Archivo e2e/helpers/mock-data.ts:
+        Datos de ejemplo para todos los mocks:
+          - sampleClasses: clases con diferentes weather status
+          - sampleBookings: bookings en diferentes estados
+          - sampleWeatherGood: weather data con APPROVED
+          - sampleWeatherBad: weather data con CANCELLED
+          - sampleKPIs: datos del dashboard admin
+
+      Archivo e2e/helpers/page-objects/:
+        Page Object Model para páginas principales:
+          - ClassesPage: métodos para buscar, filtrar, clickar clase
+          - BookingPage: métodos para avanzar en el stepper, pagar
+          - MyBookingsPage: métodos para cambiar tab, cancelar
+          - AdminDashboardPage: métodos para leer KPIs, interactuar charts
+
+  - step: 3
+    action: "Implementar test e2e: Flujo de búsqueda y reserva en e2e/booking-flow.spec.ts"
+    detail: |
+      test.describe('Booking Flow — Search → Book → Pay', () => {
+
+        test.beforeEach(async ({ page }) => {
+          await loginAsClient(page);
+        });
+
+        test('should search for classes and display results with weather semaphore', async ({ page }) => {
+          await page.goto('/');
+          // Seleccionar deporte en el buscador
+          await page.selectOption('[data-testid="search-sport"]', 'surf');
+          // Seleccionar fecha
+          await page.click('[data-testid="search-date"]');
+          await page.click('text=15'); // día 15
+          // Click buscar
+          await page.click('[data-testid="search-submit"]');
+          // Verificar resultados
+          await expect(page.locator('[data-testid="class-card"]')).toHaveCount.greaterThan(0);
+          // Verificar semáforo visible en cada card
+          await expect(page.locator('[data-testid="weather-semaphore"]').first()).toBeVisible();
+        });
+
+        test('should complete booking with Stripe payment', async ({ page }) => {
+          await page.goto('/classes');
+          // Click primera clase disponible
+          await page.click('[data-testid="class-card"]:first-child [data-testid="book-button"]');
+          // Step 1: Detalle
+          await expect(page.locator('[data-testid="booking-step-detail"]')).toBeVisible();
+          await page.click('[data-testid="next-step"]');
+          // Step 2: Participantes
+          await page.click('[data-testid="participants-increment"]');
+          await page.click('[data-testid="next-step"]');
+          // Step 3: Pago (Stripe mock)
+          await expect(page.locator('[data-testid="stripe-card-element"]')).toBeVisible();
+          await page.click('[data-testid="pay-button"]');
+          // Step 4: Confirmación
+          await expect(page.locator('text=Reserva confirmada')).toBeVisible();
+          await expect(page.locator('[data-testid="add-to-calendar"]')).toBeVisible();
+        });
+
+        test('should show weather warning modal for WARNING class', async ({ page }) => {
+          // Override mock to return WARNING class
+          await page.goto('/classes');
+          await page.click('[data-testid="class-card-warning"] [data-testid="book-button"]');
+          await expect(page.locator('[data-testid="weather-warning-modal"]')).toBeVisible();
+          await expect(page.locator('text=Condiciones de precaución')).toBeVisible();
+          await page.click('text=Entendido, continuar');
+          await expect(page.locator('[data-testid="booking-step-detail"]')).toBeVisible();
+        });
+
+        test('should block booking for CANCELLED class', async ({ page }) => {
+          await page.goto('/classes');
+          const cancelledCard = page.locator('[data-testid="class-card-cancelled"]');
+          await expect(cancelledCard.locator('[data-testid="book-button"]')).toBeDisabled();
+          await expect(cancelledCard.locator('text=Cancelado por clima')).toBeVisible();
+        });
+
+      });
+
+  - step: 4
+    action: "Implementar test e2e: Cancelación por clima en e2e/weather-cancellation.spec.ts"
+    detail: |
+      test.describe('Weather Cancellation Flow', () => {
+
+        test('should display weather cancellation notification', async ({ page }) => {
+          await loginAsClient(page);
+          // Mock: notificación de cancelación por clima
+          await page.goto('/my-bookings');
+          // Verificar booking cancelado visible en tab "Canceladas"
+          await page.click('text=Canceladas');
+          const cancelledBooking = page.locator('[data-testid="booking-card-cancelled"]').first();
+          await expect(cancelledBooking).toBeVisible();
+          await expect(cancelledBooking.locator('text=Cancelado por condiciones meteorológicas')).toBeVisible();
+          await expect(cancelledBooking.locator('text=Reembolso procesado')).toBeVisible();
+        });
+
+        test('should show notification bell badge on weather cancel', async ({ page }) => {
+          await loginAsClient(page);
+          const bellBadge = page.locator('[data-testid="notification-badge"]');
+          await expect(bellBadge).toBeVisible();
+          await page.click('[data-testid="notification-bell"]');
+          const weatherNotif = page.locator('[data-testid="notification-weather-cancel"]');
+          await expect(weatherNotif).toBeVisible();
+          await expect(weatherNotif).toHaveClass(/border-red/);
+        });
+
+      });
+
+  - step: 5
+    action: "Implementar test e2e: Panel admin con umbrales en e2e/admin-thresholds.spec.ts"
+    detail: |
+      test.describe('Admin Panel — Weather Thresholds', () => {
+
+        test.beforeEach(async ({ page }) => {
+          await loginAsAdmin(page);
+        });
+
+        test('should display dashboard with KPI cards', async ({ page }) => {
+          await page.goto('/admin/dashboard');
+          await expect(page.locator('[data-testid="kpi-occupancy"]')).toBeVisible();
+          await expect(page.locator('[data-testid="kpi-cancellations"]')).toBeVisible();
+          await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+          await expect(page.locator('[data-testid="kpi-popular-sports"]')).toBeVisible();
+        });
+
+        test('should configure weather thresholds with sliders', async ({ page }) => {
+          await page.goto('/admin/sports');
+          // Click configurar umbrales del primer deporte
+          await page.click('[data-testid="configure-thresholds"]:first-child');
+          // Verificar sliders visibles
+          const windSlider = page.locator('[data-testid="slider-wind"]');
+          await expect(windSlider).toBeVisible();
+          // Mover slider
+          await windSlider.fill('25');
+          // Verificar preview actualizada
+          await expect(page.locator('[data-testid="threshold-preview"]')).toContainText('25 kt');
+          // Guardar
+          await page.click('[data-testid="save-thresholds"]');
+          await expect(page.locator('text=Umbrales actualizados')).toBeVisible();
+        });
+
+        test('should display weather decisions log', async ({ page }) => {
+          await page.goto('/admin/weather-decisions');
+          await expect(page.locator('[data-testid="decisions-table"]')).toBeVisible();
+          // Filtrar por decisión cancelada
+          await page.selectOption('[data-testid="filter-decision"]', 'cancelled');
+          const rows = page.locator('[data-testid="decision-row"]');
+          await expect(rows).toHaveCount.greaterThan(0);
+        });
+
+      });
+
+  - step: 6
+    action: "Implementar test e2e: Agenda del instructor en e2e/instructor-agenda.spec.ts"
+    detail: |
+      test.describe('Instructor Panel — Agenda', () => {
+
+        test('should display daily agenda with weather semaphore per class', async ({ page }) => {
+          await loginAsInstructor(page);
+          await page.goto('/instructor/dashboard');
+          // Verificar clases del día visibles
+          const classSlots = page.locator('[data-testid="class-slot"]');
+          await expect(classSlots).toHaveCount.greaterThan(0);
+          // Verificar semáforo en cada slot
+          await expect(classSlots.first().locator('[data-testid="weather-semaphore"]')).toBeVisible();
+        });
+
+        test('should expand student list on click', async ({ page }) => {
+          await loginAsInstructor(page);
+          await page.goto('/instructor/dashboard');
+          await page.click('[data-testid="view-students"]:first-child');
+          await expect(page.locator('[data-testid="student-list"]')).toBeVisible();
+          await expect(page.locator('[data-testid="student-item"]')).toHaveCount.greaterThan(0);
+        });
+
+        test('should switch between daily and weekly view', async ({ page }) => {
+          await loginAsInstructor(page);
+          await page.goto('/instructor/dashboard');
+          await page.click('[data-testid="view-weekly"]');
+          await expect(page.locator('[data-testid="weekly-calendar"]')).toBeVisible();
+        });
+
+      });
+
+  - step: 7
+    action: "Implementar tests de componentes en e2e/components/"
+    detail: |
+      Archivo e2e/components/weather-semaphore.spec.ts:
+        test.describe('WeatherSemaphore Component', () => {
+          test('should render APPROVED state with green color and check icon', ...);
+          test('should render WARNING state with yellow color and alert icon', ...);
+          test('should render CANCELLED state with red color and X icon', ...);
+          test('should show label text in md and lg sizes', ...);
+          test('should hide label text in sm size', ...);
+          test('should pulse animation on WARNING state', ...);
+        });
+
+      Archivo e2e/components/booking-card.spec.ts:
+        test.describe('BookingCard Component', () => {
+          test('should display all booking information', ...);
+          test('should show cancel and modify buttons for confirmed bookings', ...);
+          test('should hide action buttons for cancelled bookings', ...);
+          test('should show live weather semaphore', ...);
+          test('should show waitlist position badge', ...);
+        });
+
+      Archivo e2e/components/calendar-picker.spec.ts:
+        test.describe('CalendarPicker Component', () => {
+          test('should allow date selection', ...);
+          test('should disable past dates', ...);
+          test('should disable dates beyond +30 days', ...);
+          test('should show weather indicators on dates', ...);
+        });
+
+      Usar Playwright component testing o render en una test page.
+
+  - step: 8
+    action: "Implementar tests de accesibilidad en e2e/accessibility.spec.ts"
+    detail: |
+      npm install -D @axe-core/playwright
+
+      test.describe('Accessibility (WCAG 2.1 AA)', () => {
+
+        test('home page should have no accessibility violations', async ({ page }) => {
+          await page.goto('/');
+          const results = await new AxeBuilder({ page }).analyze();
+          expect(results.violations).toEqual([]);
+        });
+
+        test('login page should have no accessibility violations', async ({ page }) => {
+          await page.goto('/login');
+          const results = await new AxeBuilder({ page }).analyze();
+          expect(results.violations).toEqual([]);
+        });
+
+        test('classes page should have no accessibility violations', async ({ page }) => {
+          await loginAsClient(page);
+          await page.goto('/classes');
+          const results = await new AxeBuilder({ page }).analyze();
+          expect(results.violations).toEqual([]);
+        });
+
+        test('weather semaphore should be accessible without color alone', async ({ page }) => {
+          await page.goto('/classes');
+          const semaphores = page.locator('[data-testid="weather-semaphore"]');
+          for (const semaphore of await semaphores.all()) {
+            // Verify icon is present (not color-only)
+            await expect(semaphore.locator('svg')).toBeVisible();
+            // Verify aria-label is set
+            await expect(semaphore).toHaveAttribute('aria-label', /.+/);
+          }
+        });
+
+        test('all interactive elements should be keyboard focusable', async ({ page }) => {
+          await page.goto('/');
+          await page.keyboard.press('Tab');
+          const focused = page.locator(':focus');
+          await expect(focused).toBeVisible();
+        });
+
+        test('booking flow should be navigable with keyboard only', async ({ page }) => {
+          await loginAsClient(page);
+          await page.goto('/classes');
+          // Navigate with Tab and Enter through the booking flow
+          await page.keyboard.press('Tab'); // focus first class card
+          await page.keyboard.press('Enter'); // open booking
+          await expect(page.locator('[data-testid="booking-step-detail"]')).toBeVisible();
+        });
+
+      });
+
+  - step: 9
+    action: "Implementar tests de viewport mobile en e2e/mobile.spec.ts"
+    detail: |
+      Los tests mobile se ejecutan automáticamente en los projects 'mobile-chrome' y 'mobile-safari'
+      definidos en playwright.config.ts. Adicionalmente, tests específicos:
+
+      test.describe('Mobile Viewport Tests', () => {
+        test.use({ viewport: { width: 375, height: 812 } }); // iPhone 14
+
+        test('should show mobile bottom navigation', async ({ page }) => {
+          await page.goto('/');
+          await expect(page.locator('[data-testid="mobile-bottom-nav"]')).toBeVisible();
+          await expect(page.locator('[data-testid="desktop-navbar-links"]')).not.toBeVisible();
+        });
+
+        test('should show hamburger menu instead of navbar links', async ({ page }) => {
+          await page.goto('/');
+          await expect(page.locator('[data-testid="hamburger-menu"]')).toBeVisible();
+          await page.click('[data-testid="hamburger-menu"]');
+          await expect(page.locator('[data-testid="mobile-menu-panel"]')).toBeVisible();
+        });
+
+        test('should stack class cards vertically', async ({ page }) => {
+          await loginAsClient(page);
+          await page.goto('/classes');
+          const cards = page.locator('[data-testid="class-card"]');
+          // Verify cards are stacked (each card takes full width)
+          const firstCard = await cards.first().boundingBox();
+          expect(firstCard?.width).toBeGreaterThan(350);
+        });
+
+        test('should show filters in a sheet on mobile', async ({ page }) => {
+          await loginAsClient(page);
+          await page.goto('/classes');
+          await page.click('[data-testid="open-filters"]');
+          await expect(page.locator('[data-testid="filters-sheet"]')).toBeVisible();
+        });
+
+        test('booking flow should be usable on mobile', async ({ page }) => {
+          await loginAsClient(page);
+          await page.goto('/classes');
+          await page.click('[data-testid="class-card"]:first-child [data-testid="book-button"]');
+          // Verify stepper is visible and usable
+          await expect(page.locator('[data-testid="booking-stepper"]')).toBeVisible();
+        });
+
+      });
+
+  - step: 10
+    action: "Configurar scripts y CI integration"
+    detail: |
+      Añadir scripts a package.json:
+        "test:e2e": "playwright test",
+        "test:e2e:ui": "playwright test --ui",
+        "test:e2e:chromium": "playwright test --project=chromium",
+        "test:e2e:mobile": "playwright test --project=mobile-chrome --project=mobile-safari",
+        "test:e2e:report": "playwright show-report"
+
+      Crear .github/workflows/e2e.yml (o añadir job al CI existente):
+        - Instalar dependencias
+        - Instalar browsers de Playwright
+        - npm run build
+        - npm run test:e2e
+        - Upload report artifact on failure
+
+      Crear e2e/.eslintrc.json:
+        - Extender configuración para Playwright (desactivar no-await-in-loop, etc.)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Todos los tests usan MSW para mockear la API — no dependen del backend real"
+  - "Tests deben pasar en los 3 projects: chromium, mobile-chrome, mobile-safari"
+  - "Tests de accesibilidad deben cumplir WCAG 2.1 nivel AA"
+  - "Cada test debe ser independiente — no depender del orden ni estado de otros tests"
+  - "Screenshots y videos solo se guardan en fallos (no en éxito) para ahorrar espacio"
+  - "Timeout por test: máximo 30 segundos"
+  - "No usar selectores CSS frágiles — usar data-testid para elementos clave"
+  - "Page Object Model para páginas complejas — no duplicar selectores en tests"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El flujo search→book→pay pasa end-to-end en chromium"
+  - "El flujo muestra weather warning modal para clases con WARNING"
+  - "La clase CANCELLED tiene botón de reserva deshabilitado"
+  - "La notificación de cancelación por clima aparece con estilo correcto"
+  - "El admin puede configurar umbrales con sliders y guardar"
+  - "El instructor ve agenda con semáforo meteorológico y lista de alumnos"
+  - "WeatherSemaphore renderiza los 3 estados correctamente"
+  - "BookingCard muestra toda la información y botones según estado"
+  - "Todas las páginas principales pasan audit de accesibilidad axe-core"
+  - "El semáforo meteorológico es accesible sin depender solo del color"
+  - "La UI es funcional en viewport mobile (375px)"
+  - "Mobile bottom nav aparece y hamburger menu funciona"
+  - "Todos los tests pasan en CI con Playwright"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F4: Buscador de Clases — páginas de búsqueda y resultados a testear"
+    - "F5: Flujo de Reserva — stepper de booking y pago a testear"
+    - "F6: Gestión de Reservas — página de mis reservas a testear"
+    - "F9: Panel de Administración — dashboard y configuración a testear"
+  integrates_with:
+    - "F2: Design System — componentes a testear individualmente"
+    - "F7: Notificaciones — NotificationBell a verificar"
+    - "F8: Panel Instructor — agenda a testear"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Suite completa de tests E2E con Playwright en e2e/
+    - MSW handlers reutilizables para mockear toda la API (e2e/mocks/)
+    - Page Objects para páginas principales (e2e/helpers/page-objects/)
+    - Tests de accesibilidad con axe-core integrado
+    - Tests mobile en viewport 375px (iPhone 14) y 412px (Pixel 7)
+    - Tests de componentes: WeatherSemaphore, BookingCard, CalendarPicker
+    - Configuración de CI para ejecutar tests en GitHub Actions
+    - Reportes de tests con screenshots y videos en fallos
+
+verification: "cd frontend && npx playwright test --reporter=list"

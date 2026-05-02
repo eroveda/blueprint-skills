@@ -1,0 +1,384 @@
+# ============================================================
+# SPEC B16 — CI/CD, Monitorización y Despliegue
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "CI/CD, Monitorización y Despliegue"
+purpose: "Configurar pipeline de integración continua, despliegue automatizado, health checks, logging estructurado, métricas de negocio y alertas para la API backend"
+category: "OPERATIONS"
+
+input_context: |
+  Backend completo con todos los módulos implementados y tests pasando (B15).
+  Proyecto Node.js/NestJS con las siguientes dependencias ya configuradas:
+    - PostgreSQL como base de datos principal
+    - Redis para cache y circuit breaker
+    - Stripe para pagos
+    - Open-Meteo y StormGlass como APIs meteorológicas
+  Repositorio Git en GitHub con branch principal (main).
+  Tests unitarios y e2e ejecutables con npm run test y npm run test:e2e.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear GitHub Actions workflow en .github/workflows/ci.yml"
+    detail: |
+      name: CI Pipeline
+      on:
+        push: { branches: [main, develop] }
+        pull_request: { branches: [main] }
+
+      jobs:
+        lint:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4 (Node 20)
+            - run: npm ci
+            - run: npm run lint
+            - run: npm run format:check (prettier --check)
+
+        test:
+          runs-on: ubuntu-latest
+          needs: lint
+          services:
+            postgres:
+              image: postgres:16
+              env: { POSTGRES_DB: nautibook_test, POSTGRES_USER: test, POSTGRES_PASSWORD: test }
+              ports: ['5432:5432']
+              options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+            redis:
+              image: redis:7
+              ports: ['6379:6379']
+              options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+            - run: npm ci
+            - run: npm run test -- --coverage
+              env:
+                DATABASE_URL: postgresql://test:test@localhost:5432/nautibook_test
+                REDIS_URL: redis://localhost:6379
+            - run: npm run test:e2e
+            - uses: actions/upload-artifact@v4 (coverage reports)
+
+        build:
+          runs-on: ubuntu-latest
+          needs: test
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+            - run: npm ci
+            - run: npm run build
+            - uses: actions/upload-artifact@v4 (dist/)
+
+  - step: 2
+    action: "Crear GitHub Actions workflow de deploy en .github/workflows/deploy.yml"
+    detail: |
+      name: Deploy
+      on:
+        push: { branches: [main] }
+        workflow_dispatch: {}
+
+      jobs:
+        deploy:
+          runs-on: ubuntu-latest
+          needs: [] (asume CI ya pasó via branch protection)
+          steps:
+            - uses: actions/checkout@v4
+
+            Opción A — Railway:
+            - uses: railwayapp/github-cli@v1
+              with: { command: 'up', service: 'nautibook-api' }
+
+            Opción B — Fly.io:
+            - uses: superfly/flyctl-actions/setup-flyctl@master
+            - run: flyctl deploy --remote-only
+              env: { FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} }
+
+            Post-deploy:
+            - run: curl -f https://${{ vars.API_DOMAIN }}/api/health || exit 1
+              (health check post-deploy)
+
+  - step: 3
+    action: "Crear Dockerfile multi-stage en Dockerfile"
+    detail: |
+      # Stage 1: Build
+      FROM node:20-alpine AS builder
+      WORKDIR /app
+      COPY package*.json ./
+      RUN npm ci
+      COPY . .
+      RUN npm run build
+      RUN npm prune --production
+
+      # Stage 2: Production
+      FROM node:20-alpine AS runner
+      WORKDIR /app
+      RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
+      COPY --from=builder /app/dist ./dist
+      COPY --from=builder /app/node_modules ./node_modules
+      COPY --from=builder /app/package.json ./
+      USER nestjs
+      EXPOSE 3000
+      ENV NODE_ENV=production
+      HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+        CMD wget -qO- http://localhost:3000/api/health || exit 1
+      CMD ["node", "dist/main.js"]
+
+      Crear .dockerignore:
+        node_modules, .git, .env*, test/, coverage/, *.md, .github/
+
+  - step: 4
+    action: "Implementar health check endpoint en src/modules/health/health.controller.ts"
+    detail: |
+      @Controller('api/health')
+      class HealthController:
+
+      @Get()
+      async check():
+        Verificar cada dependencia y retornar estado agregado:
+
+        response = {
+          status: 'ok' | 'degraded' | 'down',
+          timestamp: ISO string,
+          version: process.env.APP_VERSION || package.json version,
+          uptime: process.uptime(),
+          checks: {
+            database: { status: 'ok' | 'down', latency_ms: number },
+            redis: { status: 'ok' | 'down', latency_ms: number },
+            weather_api: {
+              status: 'ok' | 'degraded' | 'down',
+              primary_provider: 'open_meteo',
+              circuit_breaker_state: 'CLOSED' | 'OPEN' | 'HALF_OPEN',
+              last_successful_fetch: ISO string | null
+            }
+          }
+        }
+
+        Lógica de status global:
+          - 'ok': todos los checks son 'ok'
+          - 'degraded': weather_api en fallback pero DB y Redis ok
+          - 'down': DB o Redis no responden
+
+        HTTP status: 200 si ok/degraded, 503 si down.
+
+        No requiere autenticación (endpoint público para load balancers).
+
+  - step: 5
+    action: "Configurar logging estructurado en src/common/logger/"
+    detail: |
+      Instalar pino y nestjs-pino (o winston como alternativa).
+
+      Configurar en src/common/logger/logger.config.ts:
+        - Format: JSON en producción, pretty-print en desarrollo
+        - Campos base: timestamp, level, service: 'nautibook-api', env, requestId
+        - Request logging middleware:
+          - Log cada request: method, url, statusCode, responseTime, userId (si auth)
+          - Excluir /api/health del log (evitar ruido)
+        - Niveles: error, warn, info, debug
+        - Producción: nivel info (no debug)
+
+      Crear loggers especializados:
+        - WeatherLogger: prefijo 'weather', campos extra: spotId, provider, source
+          - info: "Weather fetched for spot {spotId} from {provider}" (cada fetch exitoso)
+          - warn: "Weather fetch failed for spot {spotId}: {error}" (cada fallo)
+          - error: "Both weather providers failed for spot {spotId}" (ambos fallan)
+        - BookingLogger: prefijo 'booking', campos: bookingId, userId
+          - info: "Booking {bookingId} created by user {userId}"
+          - info: "Booking {bookingId} cancelled: {reason}"
+        - PaymentLogger: prefijo 'payment', campos: paymentId, amount
+          - info: "Payment {paymentId} processed: {amount} EUR"
+          - info: "Refund {refundId} processed for booking {bookingId}"
+
+  - step: 6
+    action: "Implementar métricas de negocio en src/common/metrics/"
+    detail: |
+      Crear MetricsService en src/common/metrics/metrics.service.ts:
+
+      Opciones de implementación:
+        A) Custom con Redis counters (si no se quiere Prometheus):
+          - Incrementar counters en Redis con INCR
+          - Endpoint GET /api/metrics (protegido, role=admin) retorna JSON
+
+        B) Prometheus con prom-client (recomendado para producción):
+          - Exponer GET /metrics en formato Prometheus
+
+      Métricas a trackear:
+
+      Counters:
+        - weather_fetch_total { provider, status: success|failure }
+        - weather_fetch_errors_total { provider, error_type }
+        - bookings_created_total { sport, status }
+        - bookings_cancelled_total { reason: weather|user|admin }
+        - payments_processed_total { type: charge|refund, status }
+        - notifications_sent_total { type, channel }
+
+      Gauges:
+        - weather_circuit_breaker_state (0=closed, 1=open, 2=half_open)
+        - active_bookings_count
+        - waitlist_count
+
+      Histograms:
+        - weather_fetch_duration_seconds { provider }
+        - api_request_duration_seconds { method, route, status }
+
+      Integrar métricas en los servicios existentes:
+        - WeatherService: incrementar weather_fetch_total en cada fetch
+        - BookingService: incrementar bookings_created_total en cada booking
+        - PaymentService: incrementar payments_processed_total en cada pago
+
+  - step: 7
+    action: "Configurar alertas en src/common/alerts/alert.service.ts"
+    detail: |
+      AlertService que verifica condiciones y envía alertas:
+
+      Checks periódicos (ejecutar cada 5 minutos via cron):
+        - Weather API down check:
+          Si no hay weather fetch exitoso en la última hora:
+            → Log level error
+            → Enviar alerta (webhook/email)
+          Si weather API down > 1h:
+            → Alerta crítica: "Weather API has been unreachable for over 1 hour"
+
+        - Database connection check:
+          Si query de prueba falla:
+            → Alerta crítica: "Database connection lost"
+
+        - Redis connection check:
+          Si PING falla:
+            → Alerta: "Redis connection lost — cache unavailable"
+
+      Canales de alerta:
+        - Webhook (Slack/Discord): POST a ALERT_WEBHOOK_URL con payload JSON
+        - Email: enviar a ALERT_EMAIL usando servicio de email existente (B13)
+        - Fallback: siempre log level error (para captura por herramienta de logs)
+
+      Variables de entorno:
+        - ALERT_WEBHOOK_URL (opcional)
+        - ALERT_EMAIL (opcional)
+        - ALERT_CHECK_INTERVAL_MS (default: 300000)
+
+  - step: 8
+    action: "Configurar estrategia de backup de base de datos"
+    detail: |
+      Crear script scripts/backup-db.sh:
+        #!/bin/bash
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        BACKUP_FILE="nautibook_backup_${TIMESTAMP}.sql.gz"
+        pg_dump $DATABASE_URL | gzip > /backups/$BACKUP_FILE
+        # Retener últimos 30 backups, eliminar antiguos
+        ls -t /backups/nautibook_backup_*.sql.gz | tail -n +31 | xargs rm -f
+
+      Opciones de automatización:
+        A) Cron en el servidor: 0 2 * * * /app/scripts/backup-db.sh
+        B) GitHub Actions scheduled workflow (si DB accesible)
+        C) Servicio del proveedor (Railway/Fly.io automatic backups)
+
+      Crear script scripts/restore-db.sh:
+        #!/bin/bash
+        gunzip -c $1 | psql $DATABASE_URL
+
+      Documentar en OPERATIONS.md:
+        - Frecuencia: diaria a las 02:00 UTC
+        - Retención: 30 días
+        - Proceso de restauración
+
+  - step: 9
+    action: "Crear docker-compose.yml para desarrollo local completo"
+    detail: |
+      version: '3.8'
+      services:
+        api:
+          build: .
+          ports: ['3000:3000']
+          env_file: .env
+          depends_on: [postgres, redis]
+
+        postgres:
+          image: postgres:16
+          environment:
+            POSTGRES_DB: nautibook
+            POSTGRES_USER: nautibook
+            POSTGRES_PASSWORD: nautibook_dev
+          ports: ['5432:5432']
+          volumes: ['pgdata:/var/lib/postgresql/data']
+
+        redis:
+          image: redis:7-alpine
+          ports: ['6379:6379']
+          volumes: ['redisdata:/data']
+
+      volumes:
+        pgdata:
+        redisdata:
+
+  - step: 10
+    action: "Configurar branch protection y PR checks"
+    detail: |
+      Documentar configuración requerida en GitHub repo settings:
+        Branch protection rules para 'main':
+          - Require status checks: [lint, test, build]
+          - Require PR reviews: 1 mínimo
+          - Require branch up to date before merging
+          - No force pushes
+          - No deletions
+
+      Añadir badge de CI status al README:
+        ![CI](https://github.com/{owner}/{repo}/actions/workflows/ci.yml/badge.svg)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "No almacenar secretos en el código — usar GitHub Secrets y variables de entorno"
+  - "Docker image final debe ser <200MB (usar alpine + prune)"
+  - "Health check endpoint NO requiere autenticación (accesible por load balancers)"
+  - "Logs en producción siempre en formato JSON (parseable por herramientas de log)"
+  - "Alertas de weather API down solo tras >1h sin datos exitosos (evitar falsos positivos)"
+  - "Backups diarios con retención de 30 días mínimo"
+  - "CI pipeline completo debe ejecutarse en <10 minutos"
+  - "No exponer métricas Prometheus sin autenticación en producción"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "Push a main dispara: lint → test → build → deploy automáticamente"
+  - "PR a main ejecuta lint + test + build y bloquea merge si falla"
+  - "docker build genera imagen funcional que pasa health check"
+  - "GET /api/health retorna 200 con estado de DB, Redis y weather API"
+  - "GET /api/health retorna 503 si DB o Redis están caídos"
+  - "Logs de producción son JSON con requestId, timestamp, level"
+  - "Métricas de weather_fetch_total se incrementan tras cada ciclo del cron"
+  - "Alerta se dispara si weather API lleva >1h sin fetch exitoso"
+  - "Backup de DB se genera correctamente y es restaurable"
+  - "CI completo ejecuta en menos de 10 minutos"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B15: Tests de Integración — suite de tests que deben pasar en CI"
+  integrates_with:
+    - "B8: Motor de Integración Meteorológica — métricas de weather fetch"
+    - "B10: Sistema de Reservas — métricas de bookings"
+    - "B13: Sistema de Notificaciones — canal de alertas"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Pipeline CI/CD funcional en GitHub Actions (.github/workflows/)
+    - Docker image lista para despliegue en cualquier plataforma compatible
+    - Endpoint GET /api/health para monitorización externa
+    - Logging estructurado con pino/winston en formato JSON
+    - Métricas de negocio accesibles via /api/metrics o /metrics
+    - Sistema de alertas con webhook y email
+    - Scripts de backup y restore de base de datos
+    - docker-compose.yml para levantar entorno completo local
+
+verification: "docker build -t nautibook-api . && docker run --rm nautibook-api node -e 'console.log(\"Build OK\")'"

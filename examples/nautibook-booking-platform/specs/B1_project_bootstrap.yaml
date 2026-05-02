@@ -1,0 +1,374 @@
+# ============================================================
+# SPEC B1 — Backend Bootstrap y Configuracion del Entorno
+# NautiBook — Reserva de Deportes Nauticos
+# ============================================================
+
+title: "Backend Bootstrap y Configuracion del Entorno"
+purpose: "Inicializar el proyecto NestJS con TypeScript, configurar PostgreSQL, Redis, Docker Compose para desarrollo local, linters, estructura de carpetas y testing con Jest"
+category: "OPERATIONS"
+
+input_context: |
+  Proyecto nuevo desde cero. No existe codigo previo.
+  Se requiere un entorno de desarrollo local completamente funcional
+  con bases de datos, cache y herramientas de calidad de codigo.
+  Stack elegido:
+    - Runtime: Node.js 20 LTS
+    - Framework: NestJS 10+
+    - Lenguaje: TypeScript 5+
+    - Base de datos: PostgreSQL 16
+    - Cache: Redis 7
+    - ORM: TypeORM (con migraciones)
+    - Testing: Jest
+  Variables de entorno necesarias:
+    - DATABASE_URL
+    - REDIS_URL
+    - JWT_SECRET
+    - STORMGLASS_API_KEY
+    - STRIPE_SECRET_KEY
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACION
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear proyecto NestJS con CLI"
+    detail: |
+      Ejecutar:
+        npx @nestjs/cli new nautibook-api --package-manager npm --strict
+      Verificar que el proyecto compila y el test por defecto pasa:
+        cd nautibook-api && npm run build && npm test
+
+  - step: 2
+    action: "Configurar estructura de carpetas del proyecto"
+    detail: |
+      Crear la siguiente estructura dentro de src/:
+        src/
+          modules/           # Modulos de dominio (auth, booking, weather, etc.)
+          common/
+            decorators/      # Decoradores personalizados (@CurrentUser, @Roles)
+            filters/         # Exception filters globales
+            guards/          # Auth guards, Role guards
+            interceptors/    # Logging, Transform interceptors
+            pipes/           # Validation pipes personalizados
+            dto/             # DTOs compartidos (pagination, error response)
+            interfaces/      # Interfaces compartidas
+            constants/       # Constantes globales
+          database/
+            migrations/      # Migraciones TypeORM
+            seeds/           # Scripts de seed para desarrollo
+            entities/        # Entidades base si se comparten
+          config/            # Archivos de configuracion (database, redis, jwt, etc.)
+
+      Crear un archivo index.ts (barrel export) en cada subcarpeta de common/.
+
+  - step: 3
+    action: "Instalar y configurar TypeORM con PostgreSQL"
+    detail: |
+      Instalar dependencias:
+        npm install @nestjs/typeorm typeorm pg
+
+      Crear src/config/database.config.ts:
+        export default registerAs('database', () => ({
+          type: 'postgres',
+          url: process.env.DATABASE_URL,
+          autoLoadEntities: true,
+          synchronize: false,        // NUNCA true en produccion
+          migrations: ['dist/database/migrations/*.js'],
+          migrationsRun: false,
+          logging: process.env.NODE_ENV === 'development',
+        }));
+
+      Registrar TypeOrmModule.forRootAsync() en AppModule usando
+      ConfigService para inyectar la configuracion.
+
+      Crear ormconfig.ts en la raiz para la CLI de TypeORM:
+        export default {
+          type: 'postgres',
+          url: process.env.DATABASE_URL,
+          entities: ['src/**/*.entity.ts'],
+          migrations: ['src/database/migrations/*.ts'],
+          migrationsTableName: 'migrations',
+        };
+
+      Agregar scripts en package.json:
+        "migration:generate": "typeorm migration:generate -d ormconfig.ts"
+        "migration:run": "typeorm migration:run -d ormconfig.ts"
+        "migration:revert": "typeorm migration:revert -d ormconfig.ts"
+
+  - step: 4
+    action: "Instalar y configurar Redis con ioredis"
+    detail: |
+      Instalar dependencias:
+        npm install ioredis @nestjs-modules/ioredis
+
+      Crear src/config/redis.config.ts:
+        export default registerAs('redis', () => ({
+          url: process.env.REDIS_URL || 'redis://localhost:6379',
+        }));
+
+      Registrar RedisModule.forRootAsync() en AppModule con la URL
+      del ConfigService.
+
+      Crear src/common/services/redis.service.ts con metodos wrapper:
+        - get(key: string): Promise<string | null>
+        - set(key: string, value: string, ttlSeconds?: number): Promise<void>
+        - del(key: string): Promise<void>
+        - getJson<T>(key: string): Promise<T | null>
+        - setJson<T>(key: string, value: T, ttlSeconds?: number): Promise<void>
+
+  - step: 5
+    action: "Configurar @nestjs/config para variables de entorno"
+    detail: |
+      Instalar:
+        npm install @nestjs/config class-validator class-transformer
+
+      Crear src/config/env.validation.ts con class-validator:
+        class EnvironmentVariables {
+          @IsString()
+          DATABASE_URL: string;
+
+          @IsString()
+          REDIS_URL: string;
+
+          @IsString()
+          JWT_SECRET: string;
+
+          @IsString()
+          @IsOptional()
+          STORMGLASS_API_KEY?: string;
+
+          @IsString()
+          @IsOptional()
+          STRIPE_SECRET_KEY?: string;
+
+          @IsNumber()
+          @IsOptional()
+          PORT?: number = 3000;
+
+          @IsString()
+          @IsOptional()
+          NODE_ENV?: string = 'development';
+        }
+
+      Registrar ConfigModule.forRoot({ isGlobal: true, validate }) en AppModule.
+
+      Crear .env.example en la raiz del proyecto:
+        DATABASE_URL=postgresql://nautibook:nautibook@localhost:5432/nautibook
+        REDIS_URL=redis://localhost:6379
+        JWT_SECRET=super-secret-change-me
+        STORMGLASS_API_KEY=your-stormglass-api-key
+        STRIPE_SECRET_KEY=sk_test_your-stripe-key
+        PORT=3000
+        NODE_ENV=development
+
+      Agregar .env a .gitignore.
+
+  - step: 6
+    action: "Crear Docker Compose para desarrollo local"
+    detail: |
+      Crear docker-compose.yml en la raiz:
+        version: '3.8'
+        services:
+          postgres:
+            image: postgres:16-alpine
+            environment:
+              POSTGRES_USER: nautibook
+              POSTGRES_PASSWORD: nautibook
+              POSTGRES_DB: nautibook
+            ports:
+              - "5432:5432"
+            volumes:
+              - pgdata:/var/lib/postgresql/data
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U nautibook"]
+              interval: 5s
+              timeout: 5s
+              retries: 5
+
+          redis:
+            image: redis:7-alpine
+            ports:
+              - "6379:6379"
+            volumes:
+              - redisdata:/data
+            healthcheck:
+              test: ["CMD", "redis-cli", "ping"]
+              interval: 5s
+              timeout: 5s
+              retries: 5
+
+        volumes:
+          pgdata:
+          redisdata:
+
+      Agregar script en package.json:
+        "docker:up": "docker compose up -d"
+        "docker:down": "docker compose down"
+        "docker:reset": "docker compose down -v && docker compose up -d"
+
+  - step: 7
+    action: "Configurar ESLint y Prettier"
+    detail: |
+      El proyecto NestJS ya incluye configuracion base de ESLint.
+      Ajustar .eslintrc.js para agregar reglas adicionales:
+        - '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }]
+        - '@typescript-eslint/explicit-function-return-type': 'warn'
+        - 'no-console': ['warn', { allow: ['warn', 'error'] }]
+
+      Crear .prettierrc:
+        {
+          "singleQuote": true,
+          "trailingComma": "all",
+          "printWidth": 100,
+          "tabWidth": 2,
+          "semi": true
+        }
+
+      Agregar scripts:
+        "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
+        "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\""
+
+  - step: 8
+    action: "Configurar Jest para testing"
+    detail: |
+      El proyecto NestJS incluye configuracion base de Jest.
+      Ajustar jest config en package.json o jest.config.ts:
+
+        moduleFileExtensions: ['js', 'json', 'ts'],
+        rootDir: 'src',
+        testRegex: '.*\\.spec\\.ts$',
+        transform: { '^.+\\.(t|j)s$': 'ts-jest' },
+        collectCoverageFrom: ['**/*.(t|j)s', '!**/*.module.ts', '!**/main.ts'],
+        coverageDirectory: '../coverage',
+        testEnvironment: 'node',
+        moduleNameMapper: {
+          '^@modules/(.*)$': '<rootDir>/modules/$1',
+          '^@common/(.*)$': '<rootDir>/common/$1',
+          '^@config/(.*)$': '<rootDir>/config/$1',
+          '^@database/(.*)$': '<rootDir>/database/$1',
+        }
+
+      Configurar path aliases en tsconfig.json para que coincidan:
+        "paths": {
+          "@modules/*": ["src/modules/*"],
+          "@common/*": ["src/common/*"],
+          "@config/*": ["src/config/*"],
+          "@database/*": ["src/database/*"]
+        }
+
+      Agregar scripts:
+        "test": "jest"
+        "test:watch": "jest --watch"
+        "test:cov": "jest --coverage"
+        "test:e2e": "jest --config ./test/jest-e2e.json"
+
+  - step: 9
+    action: "Crear filtro global de excepciones y pipe de validacion"
+    detail: |
+      Crear src/common/filters/http-exception.filter.ts:
+        @Catch()
+        export class AllExceptionsFilter implements ExceptionFilter {
+          catch(exception: unknown, host: ArgumentsHost) {
+            // Formato estandar de respuesta de error:
+            // { statusCode, message, error, timestamp, path }
+          }
+        }
+
+      Crear src/common/pipes/validation.pipe.ts o usar el global:
+        En main.ts:
+          app.useGlobalPipes(new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+            transformOptions: { enableImplicitConversion: true },
+          }));
+
+          app.useGlobalFilters(new AllExceptionsFilter());
+
+  - step: 10
+    action: "Crear health check endpoint"
+    detail: |
+      Instalar:
+        npm install @nestjs/terminus
+
+      Crear src/modules/health/health.module.ts y health.controller.ts:
+        @Controller('health')
+        export class HealthController {
+          @Get()
+          async check() {
+            // Verificar conexion a PostgreSQL
+            // Verificar conexion a Redis
+            // Retornar { status: 'ok', checks: { database: 'up', redis: 'up' } }
+          }
+        }
+
+  - step: 11
+    action: "Verificar que todo funciona end-to-end"
+    detail: |
+      1. Levantar servicios: npm run docker:up
+      2. Copiar .env.example a .env
+      3. Ejecutar: npm run build (sin errores de compilacion)
+      4. Ejecutar: npm run start:dev
+      5. Verificar: curl http://localhost:3000/health retorna 200
+      6. Ejecutar: npm test (todos los tests pasan)
+      7. Ejecutar: npm run lint (sin errores)
+      8. Parar servicios: npm run docker:down
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Usar NestJS 10+ con TypeScript estricto (strict: true en tsconfig)"
+  - "PostgreSQL como unica base de datos relacional — no SQLite ni MySQL"
+  - "Redis solo para cache y jobs — no como base de datos primaria"
+  - "TypeORM con synchronize: false — siempre usar migraciones"
+  - "Nunca commitear archivos .env — solo .env.example"
+  - "Docker Compose solo para desarrollo local — produccion usa servicios cloud"
+  - "Todos los path aliases deben estar configurados tanto en tsconfig como en Jest"
+  - "El proyecto debe compilar y los tests deben pasar antes de considerar este nodo completo"
+  - "Node.js 20 LTS como version minima"
+
+# ============================================================
+# CRITERIOS DE ACEPTACION
+# ============================================================
+acceptance_criteria:
+  - "npm run build compila sin errores"
+  - "npm test ejecuta y pasa los tests base del proyecto"
+  - "npm run lint no reporta errores"
+  - "docker compose up -d levanta PostgreSQL y Redis sin errores"
+  - "La aplicacion arranca con npm run start:dev y escucha en el puerto configurado"
+  - "GET /health retorna 200 con status ok y checks de database y redis"
+  - "El archivo .env.example contiene todas las variables requeridas: DATABASE_URL, REDIS_URL, JWT_SECRET, STORMGLASS_API_KEY, STRIPE_SECRET_KEY"
+  - "La estructura de carpetas src/modules/, src/common/, src/database/, src/config/ existe"
+  - "Los path aliases (@modules/, @common/, @config/, @database/) funcionan en imports y en Jest"
+  - "El ValidationPipe global esta activo y rechaza propiedades no permitidas"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard: []
+  integrates_with:
+    - "B2: Modelos de Datos — usara la configuracion de TypeORM y estructura de migraciones"
+    - "B3: API Contract — usara la configuracion base de NestJS para Swagger"
+    - "B4: Auth y Seguridad — usara los guards y decoradores base de common/"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Proyecto NestJS funcional con TypeScript estricto
+    - Conexion a PostgreSQL via TypeORM (AppModule ya configurado)
+    - Conexion a Redis via ioredis (RedisService disponible para inyeccion)
+    - ConfigService global con validacion de variables de entorno
+    - Docker Compose con postgres:16 y redis:7 para desarrollo local
+    - Estructura de carpetas: src/modules/, src/common/, src/database/, src/config/
+    - Path aliases configurados: @modules/, @common/, @config/, @database/
+    - ValidationPipe global con whitelist y transform
+    - AllExceptionsFilter global con formato estandar de errores
+    - Health check endpoint: GET /health
+    - Scripts: docker:up, docker:down, migration:run, test, lint, format
+    - .env.example con todas las variables de entorno documentadas
+
+verification: "npm run build && npm test && npm run lint"

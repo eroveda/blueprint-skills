@@ -1,0 +1,401 @@
+# ============================================================
+# SPEC B12 — Pagos, Reembolsos y Bonos/Packs
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Pagos, Reembolsos y Bonos/Packs"
+purpose: "Implementar integración con Stripe para cobros y reembolsos, política de reembolso según tipo de cancelación, y sistema de bonos/packs de clases con descuento"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulos implementados:
+    - Auth (B4): JWT guard, decorador @CurrentUser(), roles (cliente|instructor|admin)
+    - Sistema de Reservas (B10):
+        BookingService.createBooking() → emite evento booking.created
+        BookingService.cancelBooking() → emite evento booking.cancelled
+        BookingService.cancelByWeather() → emite evento booking.cancelled_weather
+  Tablas creadas:
+    - payments (id, booking_id, user_id, amount, currency, status, payment_method,
+        provider_ref, refund_reason, created_at)
+    - credit_packs (id, user_id, school_id, total_credits, used_credits, sport_id,
+        expires_at, created_at)
+    - bookings (id, user_id, schedule_id, sport_id, instructor_id, spot_id,
+        date, start_time, end_time, status, participants, notes, created_at, updated_at)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo en src/modules/payment/"
+    detail: |
+      Estructura de archivos:
+        src/modules/payment/
+          payment.module.ts
+          payment.service.ts
+          payment.controller.ts
+          stripe.service.ts
+          credit-pack.service.ts
+          credit-pack.controller.ts
+          dto/
+            create-checkout.dto.ts
+            payment-response.dto.ts
+            create-credit-pack.dto.ts
+            credit-pack-response.dto.ts
+          entities/
+            payment.entity.ts
+            credit-pack.entity.ts
+          listeners/
+            booking-payment.listener.ts
+          __tests__/
+            payment.service.spec.ts
+            credit-pack.service.spec.ts
+            stripe.service.spec.ts
+            payment.integration.spec.ts
+
+  - step: 2
+    action: "Crear entidades y DTOs en src/modules/payment/dto/ y entities/"
+    detail: |
+      Payment entity:
+        id: string (UUID)
+        booking_id: string
+        user_id: string
+        amount: number              // en céntimos (e.g., 3500 = 35.00 EUR)
+        currency: string            // default 'eur'
+        status: PaymentStatus       // pending | paid | refunded | partially_refunded | failed
+        payment_method: string      // card | credit_pack
+        provider_ref: string        // Stripe PaymentIntent ID
+        refund_amount: number       // cantidad reembolsada (si aplica)
+        refund_reason: string       // weather | user_cancellation | admin
+        created_at: Date
+        updated_at: Date
+
+      CreditPack entity:
+        id: string (UUID)
+        user_id: string
+        school_id: string
+        sport_id: string
+        total_credits: number
+        used_credits: number
+        price_paid: number          // precio total del pack
+        expires_at: Date
+        created_at: Date
+
+      CreateCheckoutDTO:
+        booking_id: string
+        payment_method: 'card' | 'credit_pack'
+        credit_pack_id?: string     // si paga con bono
+
+      PaymentResponseDTO:
+        id: string
+        booking_id: string
+        amount: number
+        currency: string
+        status: PaymentStatus
+        payment_method: string
+        refund_amount?: number
+        refund_reason?: string
+        created_at: Date
+
+      CreateCreditPackDTO:
+        school_id: string
+        sport_id: string
+        total_credits: number       // e.g., 10
+        // precio se calcula desde Sport.price * total_credits * descuento
+
+      CreditPackResponseDTO:
+        id: string
+        sport: { id, name }
+        school: { id, name }
+        total_credits: number
+        used_credits: number
+        remaining_credits: number
+        expires_at: Date
+        created_at: Date
+
+  - step: 3
+    action: "Implementar StripeService en src/modules/payment/stripe.service.ts"
+    detail: |
+      Wrapper sobre Stripe SDK. Inyectar ConfigService para STRIPE_SECRET_KEY.
+
+      async createPaymentIntent(amount: number, currency: string, metadata: Record<string, string>): Promise<Stripe.PaymentIntent>
+        → Crear PaymentIntent con amount, currency, metadata (booking_id, user_id)
+        → Retornar el PaymentIntent con client_secret para frontend
+
+      async confirmPaymentIntent(paymentIntentId: string): Promise<Stripe.PaymentIntent>
+        → Confirmar un PaymentIntent (si se usa confirmación server-side)
+
+      async createRefund(paymentIntentId: string, amount?: number): Promise<Stripe.Refund>
+        → Reembolso total (sin amount) o parcial (con amount)
+        → Retornar el Refund de Stripe
+
+      async constructWebhookEvent(body: Buffer, signature: string): Promise<Stripe.Event>
+        → Verificar firma del webhook con STRIPE_WEBHOOK_SECRET
+        → Retornar evento verificado
+
+  - step: 4
+    action: "Implementar PaymentService en src/modules/payment/payment.service.ts"
+    detail: |
+      Inyectar: PaymentRepository, StripeService, CreditPackService,
+                BookingService, SportService, EventEmitter.
+
+      === CHECKOUT ===
+
+      async createCheckout(userId: string, dto: CreateCheckoutDTO): Promise<PaymentResponseDTO>
+        1. Obtener booking por ID, validar que pertenece al usuario
+        2. Validar que booking está CONFIRMED y no tiene payment previo con status paid
+        3. Obtener precio del Sport asociado
+        4. Si payment_method es 'credit_pack':
+           a. Validar credit_pack_id proporcionado
+           b. Llamar CreditPackService.useCredit(packId, userId)
+           c. Crear Payment con status=paid, payment_method=credit_pack, amount=0
+           d. Emitir evento 'payment.completed'
+           e. Retornar PaymentResponseDTO
+        5. Si payment_method es 'card':
+           a. Llamar StripeService.createPaymentIntent(amount, 'eur', metadata)
+           b. Crear Payment con status=pending, provider_ref=paymentIntent.id
+           c. Retornar PaymentResponseDTO con client_secret para frontend
+
+      === WEBHOOK ===
+
+      async handleStripeWebhook(body: Buffer, signature: string): Promise<void>
+        1. Verificar evento via StripeService.constructWebhookEvent()
+        2. Switch por event.type:
+           - 'payment_intent.succeeded':
+              a. Buscar Payment por provider_ref
+              b. Actualizar status a 'paid'
+              c. Emitir evento 'payment.completed' { bookingId, paymentId }
+           - 'payment_intent.payment_failed':
+              a. Buscar Payment por provider_ref
+              b. Actualizar status a 'failed'
+              c. Emitir evento 'payment.failed' { bookingId, paymentId }
+
+      === REEMBOLSO POR CLIMA ===
+
+      async refundByWeather(bookingId: string): Promise<PaymentResponseDTO>
+        1. Buscar Payment con booking_id y status=paid
+        2. Si payment_method es 'card':
+           a. Llamar StripeService.createRefund(provider_ref) → reembolso total
+           b. Actualizar Payment: status=refunded, refund_amount=amount, refund_reason='weather'
+        3. Si payment_method es 'credit_pack':
+           a. Llamar CreditPackService.returnCredit(packId)
+           b. Actualizar Payment: status=refunded, refund_reason='weather'
+        4. Emitir evento 'refund.processed' { bookingId, userId, amount, reason: 'weather' }
+        5. Retornar PaymentResponseDTO
+
+      === REEMBOLSO POR CANCELACIÓN DE USUARIO ===
+
+      async refundByUserCancellation(bookingId: string): Promise<PaymentResponseDTO>
+        1. Buscar Payment y Booking
+        2. Calcular horas restantes hasta la clase
+        3. Aplicar política de reembolso:
+           - >48h antes: reembolso 100%
+           - 24-48h antes: reembolso 50%
+           - <24h antes: reembolso 0%
+        4. Si reembolso > 0:
+           a. Llamar StripeService.createRefund(provider_ref, refundAmount)
+           b. Actualizar Payment con refund_amount y refund_reason='user_cancellation'
+        5. Emitir evento 'refund.processed'
+        6. Retornar PaymentResponseDTO
+
+      === CONSULTAS ===
+
+      async getPaymentById(paymentId: string): Promise<PaymentResponseDTO>
+      async getPaymentByBookingId(bookingId: string): Promise<PaymentResponseDTO>
+      async getPaymentsByUser(userId: string): Promise<PaymentResponseDTO[]>
+
+  - step: 5
+    action: "Implementar CreditPackService en src/modules/payment/credit-pack.service.ts"
+    detail: |
+      Inyectar: CreditPackRepository, SportService, StripeService, EventEmitter.
+
+      async purchasePack(userId: string, dto: CreateCreditPackDTO): Promise<CreditPackResponseDTO>
+        1. Obtener Sport por sport_id → precio unitario
+        2. Calcular precio total: precio_unitario * total_credits * factor_descuento
+           (e.g., 10 clases de surf a 35€ = 350€ - 10% descuento = 315€)
+        3. Crear PaymentIntent en Stripe por el total
+        4. Crear CreditPack con used_credits=0, expires_at=created_at + 6 meses
+        5. Retornar CreditPackResponseDTO con client_secret
+
+      async useCredit(packId: string, userId: string): Promise<void>
+        1. Obtener CreditPack, validar pertenencia al usuario
+        2. Validar que no ha expirado (expires_at > now)
+        3. Validar que remaining_credits > 0
+        4. Incrementar used_credits
+        5. Si used_credits === total_credits → loggear pack agotado
+
+      async returnCredit(packId: string): Promise<void>
+        1. Obtener CreditPack
+        2. Decrementar used_credits (devolver crédito por cancelación climática)
+
+      async getMyPacks(userId: string): Promise<CreditPackResponseDTO[]>
+        → Retornar packs activos (no expirados, con créditos restantes)
+
+      async getPackById(packId: string): Promise<CreditPackResponseDTO>
+
+  - step: 6
+    action: "Implementar listeners de eventos en src/modules/payment/listeners/booking-payment.listener.ts"
+    detail: |
+      @OnEvent('booking.cancelled_weather')
+      async handleWeatherCancellation(payload: { bookingId: string, userId: string })
+        → Llamar PaymentService.refundByWeather(payload.bookingId)
+        → Reembolso automático total
+
+      @OnEvent('booking.cancelled')
+      async handleUserCancellation(payload: { bookingId: string, userId: string, cancelledBy: string })
+        → Si cancelledBy === 'user':
+           Llamar PaymentService.refundByUserCancellation(payload.bookingId)
+        → Si cancelledBy === 'admin':
+           Llamar PaymentService.refundByWeather(payload.bookingId) // reembolso total
+
+  - step: 7
+    action: "Implementar PaymentController en src/modules/payment/payment.controller.ts"
+    detail: |
+      @Controller('api/v1/payments')
+
+      @Post('checkout')
+      @Roles('cliente')
+      async checkout(@CurrentUser() user, @Body() dto: CreateCheckoutDTO): Promise<PaymentResponseDTO>
+        → Llamar PaymentService.createCheckout()
+        → 201 si pago con créditos (inmediato)
+        → 200 con client_secret si pago con tarjeta
+
+      @Post('webhook')
+      async stripeWebhook(@Req() req, @Headers('stripe-signature') sig: string): Promise<void>
+        → Sin auth guard (Stripe llama directamente)
+        → Llamar PaymentService.handleStripeWebhook(req.rawBody, sig)
+        → 200 siempre (Stripe espera 200)
+
+      @Get(':id')
+      @Roles('cliente', 'admin')
+      async getPayment(@Param('id') id: string, @CurrentUser() user): Promise<PaymentResponseDTO>
+        → Cliente solo ve sus pagos, admin ve todos
+
+      @Get('booking/:bookingId')
+      @Roles('cliente', 'admin')
+      async getByBooking(@Param('bookingId') id: string, @CurrentUser() user): Promise<PaymentResponseDTO>
+
+  - step: 8
+    action: "Implementar CreditPackController en src/modules/payment/credit-pack.controller.ts"
+    detail: |
+      @Controller('api/v1/credit-packs')
+
+      @Post()
+      @Roles('cliente')
+      async purchase(@CurrentUser() user, @Body() dto: CreateCreditPackDTO): Promise<CreditPackResponseDTO>
+        → Llamar CreditPackService.purchasePack()
+
+      @Get()
+      @Roles('cliente')
+      async getMyPacks(@CurrentUser() user): Promise<CreditPackResponseDTO[]>
+        → Llamar CreditPackService.getMyPacks(user.id)
+
+      @Get(':id')
+      @Roles('cliente')
+      async getById(@Param('id') id: string, @CurrentUser() user): Promise<CreditPackResponseDTO>
+
+  - step: 9
+    action: "Escribir tests unitarios en src/modules/payment/__tests__/"
+    detail: |
+      payment.service.spec.ts:
+        - "should create PaymentIntent via Stripe for card checkout"
+        - "should create Payment with status=paid when using credit pack"
+        - "should reject checkout for booking not owned by user"
+        - "should reject checkout for booking already paid"
+        - "should process Stripe webhook payment_intent.succeeded"
+        - "should process Stripe webhook payment_intent.payment_failed"
+        - "should refund 100% on weather cancellation (card)"
+        - "should return credit on weather cancellation (credit pack)"
+        - "should refund 100% when user cancels >48h before"
+        - "should refund 50% when user cancels 24-48h before"
+        - "should refund 0% when user cancels <24h before"
+        - "should emit refund.processed event"
+
+      credit-pack.service.spec.ts:
+        - "should create credit pack with correct discount"
+        - "should use one credit from pack"
+        - "should reject if pack expired"
+        - "should reject if no remaining credits"
+        - "should return credit on weather cancellation"
+        - "should set expiration to 6 months from purchase"
+
+      stripe.service.spec.ts:
+        - "should create PaymentIntent with correct amount and metadata"
+        - "should create full refund"
+        - "should create partial refund with specified amount"
+        - "should verify webhook signature"
+
+  - step: 10
+    action: "Escribir tests de integración en src/modules/payment/__tests__/payment.integration.spec.ts"
+    detail: |
+      Tests e2e:
+        - "POST /api/v1/payments/checkout with card creates pending payment"
+        - "POST /api/v1/payments/checkout with credit_pack creates paid payment"
+        - "POST /api/v1/payments/webhook confirms payment on success"
+        - "Booking cancelled by weather triggers full refund automatically"
+        - "Booking cancelled by user >48h triggers full refund"
+        - "Booking cancelled by user 24-48h triggers 50% refund"
+        - "Booking cancelled by user <24h triggers no refund"
+        - "POST /api/v1/credit-packs creates pack with discount"
+        - "GET /api/v1/credit-packs returns user's active packs"
+        - "Client cannot see other client's payments"
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Todas las cantidades monetarias en céntimos (integer) — nunca float"
+  - "Moneda por defecto EUR"
+  - "El webhook de Stripe no lleva auth guard — se valida con firma HMAC"
+  - "Reembolso por clima es siempre 100% — automático e inmediato"
+  - "Política de reembolso por usuario: >48h=100%, 24-48h=50%, <24h=0%"
+  - "Los credit packs expiran a los 6 meses de la compra"
+  - "Un crédito devuelto por cancelación climática no extiende la expiración del pack"
+  - "El cliente solo ve sus propios pagos y packs"
+  - "El provider_ref (Stripe ID) es inmutable después de creación"
+  - "Nunca almacenar datos de tarjeta — todo vía Stripe Elements/PaymentIntents"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "POST /api/v1/payments/checkout crea PaymentIntent en Stripe y retorna client_secret"
+  - "POST /api/v1/payments/checkout con credit_pack descuenta crédito y confirma inmediatamente"
+  - "POST /api/v1/payments/webhook procesa payment_intent.succeeded y marca payment como paid"
+  - "Evento booking.cancelled_weather dispara reembolso total automático"
+  - "Cancelación por usuario aplica política de reembolso correctamente (100%/50%/0%)"
+  - "POST /api/v1/credit-packs crea pack con descuento y expiración a 6 meses"
+  - "Credit pack expirado no puede usarse para pagar"
+  - "Credit pack sin créditos restantes no puede usarse"
+  - "Evento refund.processed se emite tras cada reembolso"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B4: Auth y Roles — JWT guard, @CurrentUser(), @Roles()"
+    - "B10: Sistema de Reservas — BookingService, eventos booking.created, booking.cancelled, booking.cancelled_weather"
+  integrates_with:
+    - "B11: Cancelación Automática — dispara evento booking.cancelled_weather que activa reembolso"
+    - "B13: Notificaciones — consume evento refund.processed para notificar al usuario"
+  external:
+    - "Stripe API — PaymentIntents, Refunds, Webhooks"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - POST /api/v1/payments/checkout → frontend flujo de pago (Stripe Elements)
+    - POST /api/v1/payments/webhook → Stripe webhook endpoint
+    - GET /api/v1/payments/:id → frontend detalle de pago
+    - GET /api/v1/payments/booking/:bookingId → frontend ver pago de una reserva
+    - POST /api/v1/credit-packs → frontend compra de bonos
+    - GET /api/v1/credit-packs → frontend mis bonos
+    - Eventos: payment.completed, payment.failed, refund.processed → para B13 notificaciones
+    - Tabla payments con histórico → para B14 reportes (ingresos, reembolsos)
+    - Tabla credit_packs → para B14 reportes
+
+verification: "npm test -- --testPathPattern=payment"

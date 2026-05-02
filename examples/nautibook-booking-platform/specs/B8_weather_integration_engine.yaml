@@ -1,0 +1,286 @@
+# ============================================================
+# SPEC B8 — Motor de Integración Meteorológica
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Motor de Integración Meteorológica"
+purpose: "Consultar APIs meteorológicas marinas periódicamente, cachear datos en Redis y persistirlos en PostgreSQL para cada spot activo"
+category: "CONSTRUCTION"
+
+input_context: |
+  Proyecto inicializado con framework backend (Node.js/NestJS recomendado).
+  Base de datos PostgreSQL configurada con las siguientes tablas ya creadas:
+    - spots (id, school_id, name, lat, lng, description, weather_station_ref, active, created_at)
+    - weather_data (id, spot_id, timestamp, wind_speed_kt, wind_direction_deg,
+        wave_height_m, wave_period_s, water_temp_c, air_temp_c,
+        weather_source, forecast_date, fetched_at)
+  Redis configurado y accesible.
+  Módulo de escuelas y spots (B5) implementado — servicio SpotService con método findAllActive().
+  Variables de entorno disponibles:
+    - REDIS_URL
+    - STORMGLASS_API_KEY
+    - WEATHER_FETCH_INTERVAL_MS (default: 3600000)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo src/modules/weather/weather.module.ts"
+    detail: |
+      Registrar WeatherService, WeatherScheduler, WeatherController.
+      Importar SpotModule, base de datos (TypeORM/Prisma), y BullModule
+      para job queue (o usar @nestjs/schedule para cron).
+
+  - step: 2
+    action: "Crear adaptador src/modules/weather/adapters/open-meteo.adapter.ts"
+    detail: |
+      Clase OpenMeteoAdapter con método:
+        async fetchMarineData(lat: number, lng: number): Promise<WeatherDataDTO[]>
+
+      Llamar a: GET https://marine-api.open-meteo.com/v1/marine
+      Query params:
+        latitude={lat}&longitude={lng}
+        &hourly=wave_height,wave_period,wave_direction,wind_wave_height,swell_wave_height
+        &forecast_days=7
+        &timezone=auto
+
+      Parsear respuesta JSON:
+        response.hourly.time[] → array de timestamps ISO
+        response.hourly.wave_height[] → metros
+        response.hourly.wave_period[] → segundos
+        response.hourly.wave_direction[] → grados
+
+      NOTA: Open-Meteo Marine API NO incluye viento ni temperatura del agua.
+      Para viento, hacer segunda llamada a la Weather Forecast API:
+        GET https://api.open-meteo.com/v1/forecast
+        ?latitude={lat}&longitude={lng}
+        &hourly=wind_speed_10m,wind_direction_10m,temperature_2m
+        &forecast_days=7&wind_speed_unit=kn
+
+      Combinar ambas respuestas por timestamp en WeatherDataDTO.
+      Marcar weather_source = 'open_meteo'.
+
+  - step: 3
+    action: "Crear adaptador src/modules/weather/adapters/stormglass.adapter.ts"
+    detail: |
+      Clase StormGlassAdapter con método:
+        async fetchMarineData(lat: number, lng: number): Promise<WeatherDataDTO[]>
+
+      Llamar a: GET https://api.stormglass.io/v2/weather/point
+      Headers: { Authorization: STORMGLASS_API_KEY }
+      Query params:
+        lat={lat}&lng={lng}
+        &params=waveHeight,wavePeriod,waveDirection,windSpeed,windDirection,waterTemperature,airTemperature
+        &start={now_unix}&end={now_plus_7days_unix}
+
+      Parsear respuesta: response.hours[] → cada entry tiene .time y params con .sg value.
+      Convertir windSpeed de m/s a knots (* 1.94384).
+      Marcar weather_source = 'stormglass'.
+
+  - step: 4
+    action: "Crear WeatherDataDTO en src/modules/weather/dto/weather-data.dto.ts"
+    detail: |
+      Interface WeatherDataDTO:
+        spot_id: string
+        timestamp: Date            // hora del dato
+        wind_speed_kt: number      // nudos
+        wind_direction_deg: number  // 0-360
+        wave_height_m: number      // metros
+        wave_period_s: number      // segundos
+        water_temp_c: number | null // puede no estar disponible
+        air_temp_c: number | null
+        weather_source: 'open_meteo' | 'stormglass'
+        forecast_date: Date        // fecha para la que es la previsión
+        fetched_at: Date           // momento de la consulta
+
+  - step: 5
+    action: "Implementar Circuit Breaker en src/modules/weather/weather-circuit-breaker.ts"
+    detail: |
+      Clase WeatherCircuitBreaker:
+        - state: 'CLOSED' | 'OPEN' | 'HALF_OPEN'
+        - failureCount: number (default 0)
+        - failureThreshold: 3
+        - recoveryTimeout: 30 * 60 * 1000 (30 minutos)
+        - lastFailureTime: Date | null
+
+        método isOpen(): boolean
+          → true si state === 'OPEN' y no ha pasado recoveryTimeout
+          → si ha pasado recoveryTimeout, cambiar a 'HALF_OPEN', return false
+
+        método recordSuccess(): void
+          → resetear failureCount a 0, state a 'CLOSED'
+
+        método recordFailure(): void
+          → incrementar failureCount
+          → si failureCount >= failureThreshold: state = 'OPEN', lastFailureTime = now
+
+        método getActiveProvider(): 'open_meteo' | 'stormglass'
+          → si isOpen() retorna 'stormglass', sino 'open_meteo'
+
+  - step: 6
+    action: "Implementar WeatherService en src/modules/weather/weather.service.ts"
+    detail: |
+      Inyectar: OpenMeteoAdapter, StormGlassAdapter, WeatherCircuitBreaker,
+                WeatherDataRepository, RedisService, SpotService.
+
+      Métodos:
+
+      async fetchAndStoreForSpot(spot: Spot): Promise<void>
+        1. Determinar provider via circuitBreaker.getActiveProvider()
+        2. Try: llamar al adapter correspondiente con spot.lat, spot.lng
+        3. Catch: circuitBreaker.recordFailure()
+           - Si el otro provider está disponible, intentar con él
+           - Si ambos fallan, loggear error y salir
+        4. En éxito: circuitBreaker.recordSuccess()
+        5. Guardar array de WeatherDataDTO en PostgreSQL (upsert por spot_id + forecast_date)
+        6. Cachear en Redis:
+           - Key: "weather:current:{spotId}" → dato de la hora actual, TTL 3600s
+           - Key: "weather:forecast:{spotId}" → array completo 7 días, TTL 3600s
+
+      async getCurrentWeather(spotId: string): Promise<WeatherDataDTO | null>
+        1. Intentar leer de Redis key "weather:current:{spotId}"
+        2. Si cache miss → consultar PostgreSQL (último dato con forecast_date <= now)
+        3. Si encontrado, re-cachear y retornar
+
+      async getForecast(spotId: string): Promise<WeatherDataDTO[]>
+        1. Intentar leer de Redis key "weather:forecast:{spotId}"
+        2. Si cache miss → consultar PostgreSQL (datos con forecast_date > now, max 7 días)
+        3. Re-cachear y retornar
+
+  - step: 7
+    action: "Implementar WeatherScheduler en src/modules/weather/weather.scheduler.ts"
+    detail: |
+      Usar @Cron('0 * * * *') o equivalente para ejecutar cada hora en punto.
+
+      Método handleWeatherFetch():
+        1. Obtener todos los spots activos via SpotService.findAllActive()
+        2. Para cada spot, llamar WeatherService.fetchAndStoreForSpot(spot)
+        3. Ejecutar en paralelo con Promise.allSettled() (no Promise.all para no fallar todo)
+        4. Loggear resumen: "Fetched weather for X/Y spots, Z failures"
+        5. Emitir métrica: weather_fetch_total, weather_fetch_errors
+
+  - step: 8
+    action: "Implementar WeatherController en src/modules/weather/weather.controller.ts"
+    detail: |
+      @Controller('api/weather')
+
+      @Get(':spotId')
+      async getCurrentWeather(@Param('spotId') spotId: string)
+        → Validar que spotId existe
+        → Llamar WeatherService.getCurrentWeather(spotId)
+        → Si no hay datos, retornar 404 con { error: "No weather data available for this spot" }
+        → Retornar 200 con WeatherDataDTO
+
+      @Get(':spotId/forecast')
+      async getForecast(@Param('spotId') spotId: string)
+        → Validar que spotId existe
+        → Llamar WeatherService.getForecast(spotId)
+        → Retornar 200 con { spot_id, forecast: WeatherDataDTO[], fetched_at }
+
+      Ambos endpoints requieren autenticación (JWT guard).
+
+  - step: 9
+    action: "Escribir tests unitarios en src/modules/weather/__tests__/weather.service.spec.ts"
+    detail: |
+      Tests:
+        - "should fetch from Open-Meteo when circuit is CLOSED"
+        - "should fallback to StormGlass when Open-Meteo fails 3 times"
+        - "should return to Open-Meteo after recovery timeout (30 min)"
+        - "should cache current weather in Redis with TTL 1h"
+        - "should serve from cache on cache hit"
+        - "should query PostgreSQL on cache miss"
+        - "should handle both providers failing gracefully"
+
+      Mockear: OpenMeteoAdapter, StormGlassAdapter, Redis, Repository.
+
+  - step: 10
+    action: "Escribir tests unitarios del circuit breaker en src/modules/weather/__tests__/circuit-breaker.spec.ts"
+    detail: |
+      Tests:
+        - "should start in CLOSED state"
+        - "should remain CLOSED after fewer than 3 failures"
+        - "should transition to OPEN after 3 consecutive failures"
+        - "should return stormglass as active provider when OPEN"
+        - "should transition to HALF_OPEN after recovery timeout"
+        - "should transition back to CLOSED on success in HALF_OPEN"
+        - "should transition back to OPEN on failure in HALF_OPEN"
+
+  - step: 11
+    action: "Escribir tests de integración en src/modules/weather/__tests__/weather.integration.spec.ts"
+    detail: |
+      Tests con API real mockeada (nock/msw):
+        - "should parse Open-Meteo marine + forecast response correctly"
+        - "should parse StormGlass response correctly"
+        - "should store weather data in PostgreSQL"
+        - "should return current weather via GET /api/weather/:spotId"
+        - "should return 7-day forecast via GET /api/weather/:spotId/forecast"
+        - "should return 404 for non-existent spot"
+
+  - step: 12
+    action: "Actualizar documentación"
+    detail: |
+      Añadir a ARCHITECTURE.md:
+        - Sección "Weather Integration Engine" con diagrama de flujo del cron job
+        - Descripción del circuit breaker pattern
+        - Formato de cache keys en Redis
+      Añadir a FUNCTIONAL_FLOWS.md:
+        - "Consulta meteorológica automática" (actor: Sistema)
+        - "Usuario consulta condiciones actuales" (actor: Usuario)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Open-Meteo es el provider primario — NO requiere API key"
+  - "StormGlass es el fallback — requiere STORMGLASS_API_KEY en env"
+  - "StormGlass tiene límite de 10 req/día en tier gratuito — solo usar como fallback"
+  - "Circuit breaker: 3 fallos consecutivos → OPEN → fallback 30 min → HALF_OPEN → retry"
+  - "Cache Redis TTL 1 hora por spot — no cachear indefinidamente"
+  - "Todos los timestamps en UTC, formato ISO 8601"
+  - "Velocidad del viento siempre en nudos (knots), convertir si la fuente da m/s"
+  - "Altura de olas siempre en metros"
+  - "No hacer más de 1 consulta por spot por hora (respetar rate limits)"
+  - "El scheduler debe usar Promise.allSettled, no Promise.all — un spot fallido no bloquea los demás"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El cron job se ejecuta cada hora y consulta todos los spots activos"
+  - "GET /api/weather/:spotId retorna 200 con datos meteorológicos actuales"
+  - "GET /api/weather/:spotId/forecast retorna 200 con previsión de 7 días"
+  - "GET /api/weather/nonexistent retorna 404"
+  - "Si Open-Meteo falla 3 veces, el sistema cambia automáticamente a StormGlass"
+  - "Tras 30 min en modo fallback, el sistema intenta volver a Open-Meteo"
+  - "Los datos se sirven desde Redis cache en peticiones consecutivas (< 1h)"
+  - "Si Redis está vacío, se consulta PostgreSQL como segunda capa"
+  - "Todos los tests unitarios y de integración pasan"
+  - "Los logs registran cada fetch exitoso y cada fallo con el provider usado"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — framework, DB, Redis configurados"
+    - "B2: Modelos de Datos — tabla weather_data, tabla spots creadas"
+    - "B5: Gestión de Escuelas y Spots — SpotService.findAllActive() disponible"
+  integrates_with:
+    - "B9: Motor de Decisión Climática — consume WeatherData para evaluar vs umbrales"
+    - "B14: Reportes y Métricas — consume WeatherData histórico para analytics"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - WeatherService.getCurrentWeather(spotId) → WeatherDataDTO actual
+    - WeatherService.getForecast(spotId) → WeatherDataDTO[] previsión 7 días
+    - GET /api/weather/:spotId → endpoint REST para frontend
+    - GET /api/weather/:spotId/forecast → endpoint REST para frontend
+    - Tabla weather_data en PostgreSQL con histórico completo
+    - Cache keys Redis: weather:current:{spotId}, weather:forecast:{spotId}
+    - WeatherCircuitBreaker — estado del circuit breaker consultable
+
+verification: "npm test -- --testPathPattern=weather"

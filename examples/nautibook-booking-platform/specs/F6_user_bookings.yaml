@@ -1,0 +1,262 @@
+# ============================================================
+# SPEC F6 — Gestión de Reservas del Usuario
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Gestión de Reservas del Usuario"
+purpose: "Implementar la página de reservas del usuario con pestañas de reservas activas, pasadas y canceladas, detalle de cada reserva con semáforo meteorológico en vivo, acciones de cancelación/modificación, y gestión de packs de créditos"
+category: "CONSTRUCTION"
+
+input_context: |
+  Auth y perfil de usuario implementados (F3).
+  Backend operativo con endpoints:
+    - GET /api/users/me/bookings?status= (B10)
+    - GET /api/bookings/:id (B10)
+    - DELETE /api/bookings/:id (B10, cancelación)
+    - PATCH /api/bookings/:id (B10, modificación)
+    - GET /api/users/me/credit-packs (B12)
+    - GET /api/weather/:spotId (B8)
+  Componentes disponibles: BookingCard, WeatherSemaphore, StatusBadge, PriceTag.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear página de reservas en app/(protected)/my-bookings/page.tsx"
+    detail: |
+      Layout:
+        - Título "Mis Reservas"
+        - Tabs component (shadcn/ui Tabs):
+          - Tab "Próximas" (default, icon Calendar)
+          - Tab "Pasadas" (icon History)
+          - Tab "Canceladas" (icon XCircle)
+        - Tab activa sincronizada con query param: ?tab=upcoming|past|cancelled
+
+      Fetching por tab:
+        - Upcoming: GET /api/users/me/bookings?status=confirmed,waitlist&from=today
+        - Past: GET /api/users/me/bookings?status=completed&to=yesterday
+        - Cancelled: GET /api/users/me/bookings?status=cancelled_weather,cancelled_user
+
+      Cada tab muestra lista de BookingCard con datos de la reserva.
+
+      Empty states por tab:
+        - Upcoming: "No tienes reservas próximas" + botón "Buscar clases" → /classes
+        - Past: "Aún no has completado ninguna clase"
+        - Cancelled: "No tienes reservas canceladas"
+
+      Loading: skeleton BookingCards (3 items).
+
+  - step: 2
+    action: "Mejorar BookingCard para la vista de mis reservas"
+    detail: |
+      Extender el BookingCard (F2) para esta página:
+
+      Información mostrada:
+        - Deporte: icono + nombre + nivel badge
+        - Fecha y hora: formateado legible, con indicador "mañana" / "en 3 días"
+        - Instructor: avatar mini + nombre
+        - Spot: nombre de la ubicación
+        - WeatherSemaphore: tamaño md, actualizado en vivo
+          - useCurrentWeather(spotId) para mostrar estado real actual
+        - StatusBadge: confirmed (verde), waitlist (azul), cancelled_weather (rojo), etc.
+        - Si waitlist: mostrar "Posición: {position}" con badge azul
+
+      Acciones (visibles solo en tab "Próximas" con status confirmed):
+        - Botón "Cancelar" (outline, red) → abre modal de cancelación
+        - Botón "Modificar fecha" (outline, ocean) → abre modal de modificación
+        - Menú dropdown (...) con opciones adicionales: "Ver detalle", "Añadir al calendario"
+
+      Para bookings cancelados por clima:
+        - Mostrar razón: "Cancelado por condiciones meteorológicas adversas"
+        - Mostrar si hay reembolso: "Reembolso procesado: {amount} EUR"
+        - Botón "Reservar clase similar" → /classes?sport={sport}
+
+  - step: 3
+    action: "Implementar modal de cancelación en components/booking/CancelBookingModal.tsx"
+    detail: |
+      Props: booking: Booking, isOpen: boolean, onClose, onConfirm
+
+      Contenido del modal:
+        - Título: "¿Cancelar reserva?"
+        - Resumen: deporte, fecha, hora
+        - Sección "Política de cancelación":
+          - > 48h antes: "Reembolso completo"
+          - 24-48h antes: "Reembolso del 50%"
+          - < 24h antes: "Sin reembolso"
+          - Calcular automáticamente cuál aplica según fecha de la clase
+          - Mostrar monto del reembolso estimado
+        - Si reserva pagada con credit pack:
+          - "Los créditos se devolverán a tu pack"
+        - Botón "Cancelar reserva" (red, destructive)
+        - Botón "Mantener reserva" (outline)
+
+      Lógica:
+        - onConfirm: DELETE /api/bookings/{id}
+        - Mostrar loading state durante la petición
+        - En éxito: toast "Reserva cancelada", invalidar query de bookings
+        - En error: toast error, mantener modal abierto
+
+  - step: 4
+    action: "Implementar modal de modificación de fecha en components/booking/ModifyBookingModal.tsx"
+    detail: |
+      Props: booking: Booking, isOpen: boolean, onClose, onConfirm
+
+      Contenido:
+        - Título: "Modificar reserva"
+        - Fecha actual: mostrar como referencia
+        - CalendarPicker para nueva fecha
+        - TimeSlotPicker para nueva hora (cargado al seleccionar fecha)
+          - Slots con WeatherSemaphore
+          - Solo slots disponibles con el mismo instructor y deporte
+        - WeatherSemaphore de la nueva fecha/hora seleccionada
+
+      Lógica:
+        - Al seleccionar fecha: GET /api/classes?sport={sportId}&date={newDate}&instructorId={id}
+        - Al confirmar: PATCH /api/bookings/{id} { date: newDate, scheduleId: newSlotId }
+        - En éxito: toast "Reserva modificada", invalidar queries
+        - No permitir modificar a una fecha con weather status CANCELLED
+
+  - step: 5
+    action: "Crear página de detalle de reserva en app/(protected)/my-bookings/[id]/page.tsx"
+    detail: |
+      Fetching: useQuery GET /api/bookings/{id}
+
+      Layout completo:
+        - Header: StatusBadge grande + booking reference ID
+        - Grid dos columnas:
+
+        Columna izquierda — Información:
+          - Card "Clase":
+            - Deporte, nivel, duración
+            - Fecha y hora
+            - Participantes
+          - Card "Instructor":
+            - InstructorCard
+          - Card "Ubicación":
+            - Spot nombre
+            - SpotMap con 1 marker
+
+        Columna derecha — Weather y pago:
+          - Card "Condiciones Meteorológicas" (prominente):
+            - WeatherDashboard completo del spot
+            - Actualizado en vivo (refetch cada 5 min)
+            - Si status WARNING o CANCELLED: alerta visible
+          - Card "Pago":
+            - Método de pago (tarjeta ****1234 o "Pack de créditos")
+            - Monto pagado
+            - Estado del pago
+            - Si refund: monto reembolsado + fecha
+          - Acciones (si booking activo):
+            - Botón "Cancelar reserva"
+            - Botón "Modificar fecha"
+            - Botón "Añadir al calendario"
+
+  - step: 6
+    action: "Crear sección de credit packs en app/(protected)/my-packs/page.tsx"
+    detail: |
+      Fetching: useQuery GET /api/users/me/credit-packs
+
+      Layout:
+        - Título "Mis Packs de Créditos"
+        - Grid de cards, una por pack:
+
+      PackCard component:
+        - Deporte del pack (icono + nombre)
+        - Barra de progreso: used_credits / total_credits
+        - Texto: "{remaining} créditos restantes de {total}"
+        - Fecha de expiración: "Expira el {date}" con color warning si <30 días
+        - StatusBadge: "Activo" (verde) o "Expirado" (rojo)
+        - Si expirado: fondo gris, overlay "Expirado"
+
+      Sección "Historial de uso":
+        - Lista de bookings pagados con este pack
+        - Fecha, clase, créditos usados
+
+      Botón "Comprar más créditos" → /credit-packs/buy (o modal)
+
+      Empty state: "No tienes packs de créditos" + botón "Comprar pack"
+
+  - step: 7
+    action: "Crear hooks de gestión de reservas en hooks/"
+    detail: |
+      Archivo hooks/useUserBookings.ts:
+        export function useUserBookings(status?: string) {
+          return useQuery({
+            queryKey: ['user-bookings', status],
+            queryFn: () => apiClient.get('/users/me/bookings', { params: { status } }),
+          });
+        }
+
+        export function useBookingDetail(bookingId: string) {
+          return useQuery({
+            queryKey: ['booking', bookingId],
+            queryFn: () => apiClient.get(`/bookings/${bookingId}`),
+          });
+        }
+
+        export function useCancelBooking() {
+          return useMutation({
+            mutationFn: (bookingId: string) => apiClient.delete(`/bookings/${bookingId}`),
+            onSuccess: () => queryClient.invalidateQueries(['user-bookings']),
+          });
+        }
+
+        export function useModifyBooking() {
+          return useMutation({
+            mutationFn: ({ bookingId, data }) => apiClient.patch(`/bookings/${bookingId}`, data),
+            onSuccess: () => queryClient.invalidateQueries(['user-bookings']),
+          });
+        }
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "El semáforo meteorológico en BookingCard debe mostrar estado EN VIVO — no el estado al momento de la reserva"
+  - "La política de cancelación debe calcularse automáticamente según la diferencia horaria"
+  - "No permitir cancelar bookings con status 'completed' o ya cancelados"
+  - "No permitir modificar a una fecha con weather status CANCELLED"
+  - "Los credit packs expirados deben ser visibles pero marcados claramente como no usables"
+  - "Bookings de waitlist deben mostrar posición actualizada"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "La página /my-bookings muestra tabs funcionales con bookings filtrados por estado"
+  - "Cada BookingCard muestra el semáforo meteorológico en vivo del spot"
+  - "La cancelación muestra política de reembolso correcta según tiempo restante"
+  - "La cancelación exitosa actualiza la lista de bookings y muestra toast"
+  - "La modificación permite cambiar fecha mostrando slots con semáforo meteorológico"
+  - "La página de detalle muestra WeatherDashboard completo del spot en vivo"
+  - "La sección de credit packs muestra balance, progreso y expiración"
+  - "Los packs expirados se muestran como inactivos"
+  - "Empty states informativos en cada tab cuando no hay bookings"
+  - "Los bookings cancelados por clima muestran razón y monto de reembolso"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F3: Auth y Perfil — usuario autenticado, rutas protegidas"
+    - "B10: Sistema de Reservas — endpoints de bookings del usuario"
+    - "B12: Pagos y Reembolsos — credit packs y políticas de reembolso"
+  integrates_with:
+    - "F5: Flujo de Reserva — bookings creados aparecen aquí"
+    - "B8: Motor Meteorológico — weather data en vivo para cada booking"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Página /my-bookings con tabs (upcoming, past, cancelled)
+    - Página /my-bookings/[id] con detalle completo y weather en vivo
+    - Página /my-packs con gestión de credit packs
+    - Modal de cancelación con política de reembolso
+    - Modal de modificación con CalendarPicker y TimeSlotPicker
+    - Hooks: useUserBookings, useBookingDetail, useCancelBooking, useModifyBooking
+
+verification: "cd frontend && npm run build && npm run lint"

@@ -1,0 +1,346 @@
+# ============================================================
+# SPEC B6 — Catálogo de Deportes y Umbrales Meteorológicos
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Catálogo de Deportes y Umbrales Meteorológicos"
+purpose: "Implementar CRUD de deportes náuticos por escuela con niveles y precios, y configuración de umbrales meteorológicos por deporte con acciones asociadas (cancelar o advertir)"
+category: "CONSTRUCTION"
+
+input_context: |
+  Proyecto inicializado con framework backend (Node.js/NestJS recomendado).
+  Base de datos PostgreSQL configurada con las siguientes tablas ya creadas:
+    - sports (id, school_id, name, description, level, max_participants, duration_minutes, price, active, created_at)
+    - weather_thresholds (id, sport_id, max_wind_speed_kt, max_wave_height_m, min_water_temp_c, max_wave_period_s, conditions_json, action, created_at)
+  Módulo de autenticación (B4) implementado — JWT guard y decorador @Roles() disponibles.
+  Módulo de escuelas (B5) implementado — SchoolService.findById() disponible.
+  Variables de entorno disponibles:
+    - DATABASE_URL
+    - JWT_SECRET
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo src/modules/sports/sports.module.ts"
+    detail: |
+      Registrar SportService, SportController, WeatherThresholdService, WeatherThresholdController.
+      Importar AuthModule (para guards), SchoolModule (para validar escuela), TypeORM/Prisma.
+      Exportar SportService y WeatherThresholdService para consumo por otros módulos.
+
+  - step: 2
+    action: "Crear DTOs en src/modules/sports/dto/"
+    detail: |
+      CreateSportDTO:
+        school_id: string (required, UUID)
+        name: string (required, min 2, max 100)
+        description: string (optional, max 500)
+        level: enum (required, valores: 'principiante' | 'intermedio' | 'avanzado')
+        max_participants: number (required, min 1, max 50)
+        duration_minutes: number (required, min 15, max 480)
+        price: number (required, min 0, precisión 2 decimales)
+        active: boolean (default true)
+
+      UpdateSportDTO: Partial<CreateSportDTO> (school_id no editable)
+
+      CreateWeatherThresholdDTO:
+        max_wind_speed_kt: number (required, min 0)
+        max_wave_height_m: number (required, min 0)
+        min_water_temp_c: number (optional, puede ser null)
+        max_wave_period_s: number (optional, puede ser null)
+        conditions_json: object (optional, para condiciones adicionales)
+        action: enum (required, valores: 'cancel' | 'warn')
+
+      UpdateWeatherThresholdDTO: Partial<CreateWeatherThresholdDTO>
+
+      Usar class-validator para decoradores de validación.
+
+  - step: 3
+    action: "Implementar SportService en src/modules/sports/sport.service.ts"
+    detail: |
+      Inyectar: SportRepository, SchoolService.
+
+      Métodos:
+
+      async create(dto: CreateSportDTO): Promise<Sport>
+        → Verificar que la escuela existe via SchoolService.findById(dto.school_id)
+        → Crear deporte, retornar entidad creada
+
+      async findAll(filters?: { school_id?: string, level?: string, active?: boolean }): Promise<Sport[]>
+        → Retornar deportes filtrados por escuela, nivel y/o estado activo
+        → Ordenar por name ASC
+
+      async findById(id: string): Promise<Sport>
+        → Buscar por id, lanzar NotFoundException si no existe
+
+      async findBySchool(schoolId: string): Promise<Sport[]>
+        → Retornar todos los deportes de una escuela
+
+      async update(id: string, dto: UpdateSportDTO): Promise<Sport>
+        → Verificar existencia, actualizar campos
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia
+        → Verificar que no tiene reservas activas (futuras) vinculadas
+        → Si tiene reservas activas, lanzar ConflictException
+        → Eliminar deporte y sus umbrales asociados (cascade)
+
+  - step: 4
+    action: "Implementar WeatherThresholdService en src/modules/sports/weather-threshold.service.ts"
+    detail: |
+      Inyectar: WeatherThresholdRepository, SportService.
+
+      Métodos:
+
+      async create(sportId: string, dto: CreateWeatherThresholdDTO): Promise<WeatherThreshold>
+        → Verificar que el deporte existe via SportService.findById(sportId)
+        → Verificar que no existe ya un umbral para este deporte (1:1)
+        → Si ya existe, lanzar ConflictException con mensaje "Threshold already exists for this sport, use PATCH to update"
+        → Crear umbral vinculado al deporte
+
+      async findBySport(sportId: string): Promise<WeatherThreshold | null>
+        → Retornar umbral del deporte, o null si no tiene
+
+      async findById(id: string): Promise<WeatherThreshold>
+        → Buscar por id, lanzar NotFoundException si no existe
+
+      async update(id: string, dto: UpdateWeatherThresholdDTO): Promise<WeatherThreshold>
+        → Verificar existencia, actualizar campos
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia, eliminar umbral
+
+  - step: 5
+    action: "Crear seed data en src/modules/sports/seeds/default-thresholds.seed.ts"
+    detail: |
+      Definir umbrales por defecto para deportes comunes:
+
+      PADDLE_SURF:
+        max_wind_speed_kt: 12
+        max_wave_height_m: 0.5
+        min_water_temp_c: 14
+        max_wave_period_s: null
+        action: 'cancel'
+
+      KAYAK:
+        max_wind_speed_kt: 15
+        max_wave_height_m: 1.0
+        min_water_temp_c: 12
+        max_wave_period_s: null
+        action: 'cancel'
+
+      VELA (sailing):
+        max_wind_speed_kt: 25
+        max_wave_height_m: 2.0
+        min_water_temp_c: null
+        max_wave_period_s: null
+        action: 'warn'
+
+      SURF:
+        max_wind_speed_kt: 30
+        max_wave_height_m: 3.0
+        min_water_temp_c: 12
+        max_wave_period_s: 14
+        action: 'warn'
+
+      Exportar función seedDefaultThresholds(sportId: string, sportName: string)
+      que retorna el CreateWeatherThresholdDTO correspondiente según el nombre del deporte.
+      Esta función es invocada opcionalmente al crear un deporte para pre-cargar umbrales.
+
+  - step: 6
+    action: "Implementar SportController en src/modules/sports/sport.controller.ts"
+    detail: |
+      @Controller('api/v1/sports')
+
+      @Get()
+      async findAll(@Query() filters: { school_id?: string, level?: string })
+        → Requiere autenticación (JWT guard)
+        → Llamar SportService.findAll(filters)
+        → Retornar 200 con array de deportes
+
+      @Get(':id')
+      async findById(@Param('id') id: string)
+        → Requiere autenticación
+        → Llamar SportService.findById(id)
+        → Retornar 200 con deporte, o 404 si no existe
+
+      @Post()
+      async create(@Body() dto: CreateSportDTO)
+        → Requiere autenticación + rol admin
+        → Validar DTO
+        → Llamar SportService.create(dto)
+        → Retornar 201 con deporte creado
+
+      @Patch(':id')
+      async update(@Param('id') id: string, @Body() dto: UpdateSportDTO)
+        → Requiere autenticación + rol admin
+        → Llamar SportService.update(id, dto)
+        → Retornar 200 con deporte actualizado
+
+      @Delete(':id')
+      async delete(@Param('id') id: string)
+        → Requiere autenticación + rol admin
+        → Llamar SportService.delete(id)
+        → Retornar 204 sin contenido
+
+  - step: 7
+    action: "Implementar WeatherThresholdController en src/modules/sports/weather-threshold.controller.ts"
+    detail: |
+      @Controller('api/v1/sports/:sportId/thresholds')
+
+      @Get()
+      async findBySport(@Param('sportId') sportId: string)
+        → Requiere autenticación (cualquier usuario autenticado)
+        → Llamar WeatherThresholdService.findBySport(sportId)
+        → Si no existe, retornar 200 con null (el deporte puede no tener umbrales configurados)
+        → Retornar 200 con umbral
+
+      @Post()
+      async create(@Param('sportId') sportId: string, @Body() dto: CreateWeatherThresholdDTO)
+        → Requiere autenticación + rol admin
+        → Llamar WeatherThresholdService.create(sportId, dto)
+        → Retornar 201 con umbral creado
+
+      @Patch(':thresholdId')
+      async update(@Param('thresholdId') thresholdId: string, @Body() dto: UpdateWeatherThresholdDTO)
+        → Requiere autenticación + rol admin
+        → Llamar WeatherThresholdService.update(thresholdId, dto)
+        → Retornar 200 con umbral actualizado
+
+      @Delete(':thresholdId')
+      async delete(@Param('thresholdId') thresholdId: string)
+        → Requiere autenticación + rol admin
+        → Llamar WeatherThresholdService.delete(thresholdId)
+        → Retornar 204 sin contenido
+
+  - step: 8
+    action: "Escribir tests unitarios en src/modules/sports/__tests__/sport.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create a sport linked to an existing school"
+        - "should throw NotFoundException for non-existent school when creating sport"
+        - "should return all sports filtered by school_id"
+        - "should return all sports filtered by level"
+        - "should return a sport by id"
+        - "should throw NotFoundException for non-existent sport"
+        - "should update a sport"
+        - "should throw ConflictException when deleting sport with active bookings"
+        - "should delete a sport and cascade delete its thresholds"
+
+      Mockear: SportRepository, SchoolService.
+
+  - step: 9
+    action: "Escribir tests unitarios en src/modules/sports/__tests__/weather-threshold.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create a threshold for a sport"
+        - "should throw NotFoundException for non-existent sport"
+        - "should throw ConflictException when threshold already exists for sport"
+        - "should return threshold by sport id"
+        - "should return null when sport has no threshold"
+        - "should update a threshold"
+        - "should delete a threshold"
+        - "should return correct default thresholds for paddle_surf"
+        - "should return correct default thresholds for kayak"
+        - "should return correct default thresholds for vela"
+        - "should return correct default thresholds for surf"
+
+      Mockear: WeatherThresholdRepository, SportService.
+
+  - step: 10
+    action: "Escribir tests de integración en src/modules/sports/__tests__/sports.integration.spec.ts"
+    detail: |
+      Tests con base de datos de test:
+        - "POST /api/v1/sports → 201 con datos válidos y rol admin"
+        - "POST /api/v1/sports → 403 con rol cliente"
+        - "POST /api/v1/sports → 400 con level inválido"
+        - "GET /api/v1/sports → 200 con lista de deportes"
+        - "GET /api/v1/sports?school_id=X → 200 filtrado por escuela"
+        - "GET /api/v1/sports?level=principiante → 200 filtrado por nivel"
+        - "GET /api/v1/sports/:id → 200 con deporte existente"
+        - "GET /api/v1/sports/:id → 404 con id inexistente"
+        - "PATCH /api/v1/sports/:id → 200 con rol admin"
+        - "DELETE /api/v1/sports/:id → 204 con rol admin"
+        - "POST /api/v1/sports/:id/thresholds → 201 con umbral válido"
+        - "POST /api/v1/sports/:id/thresholds → 409 si ya existe umbral"
+        - "GET /api/v1/sports/:id/thresholds → 200 con umbral"
+        - "PATCH /api/v1/sports/:id/thresholds/:tid → 200 actualizando umbral"
+        - "DELETE /api/v1/sports/:id/thresholds/:tid → 204 con rol admin"
+
+  - step: 11
+    action: "Actualizar documentación"
+    detail: |
+      Añadir a ARCHITECTURE.md:
+        - Sección "Sports & Weather Thresholds Module"
+        - Diagrama de relación School → Sport (1:N), Sport → WeatherThreshold (1:1)
+        - Tabla de umbrales por defecto
+      Añadir a FUNCTIONAL_FLOWS.md:
+        - "Admin gestiona catálogo de deportes" (actor: Admin)
+        - "Admin configura umbrales meteorológicos" (actor: Admin)
+        - "Usuario consulta deportes disponibles" (actor: Usuario)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Solo usuarios con rol admin pueden crear, editar o eliminar deportes y umbrales"
+  - "Cualquier usuario autenticado puede listar y ver deportes y umbrales"
+  - "Cada deporte tiene exactamente un umbral meteorológico (relación 1:1) — no se permiten duplicados"
+  - "Level debe ser uno de: principiante, intermedio, avanzado"
+  - "Price debe ser >= 0 con precisión de 2 decimales"
+  - "max_participants debe ser entre 1 y 50"
+  - "duration_minutes debe ser entre 15 y 480 (8 horas máximo)"
+  - "Umbrales de viento en nudos (knots), oleaje en metros, temperatura en Celsius"
+  - "Action del umbral debe ser 'cancel' o 'warn' — cancel dispara cancelación automática en B9, warn solo muestra advertencia"
+  - "No se puede eliminar un deporte que tenga reservas futuras activas — retornar 409 Conflict"
+  - "Al eliminar un deporte, sus umbrales se eliminan en cascada"
+  - "IDs en formato UUID v4"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "POST /api/v1/sports crea un deporte vinculado a una escuela y retorna 201 (solo admin)"
+  - "POST /api/v1/sports retorna 403 para usuarios no admin"
+  - "GET /api/v1/sports retorna 200 con lista de deportes, filtrables por school_id y level"
+  - "GET /api/v1/sports/:id retorna 200 con el deporte o 404 si no existe"
+  - "POST /api/v1/sports/:id/thresholds crea un umbral meteorológico y retorna 201 (solo admin)"
+  - "POST /api/v1/sports/:id/thresholds retorna 409 si ya existe un umbral para ese deporte"
+  - "GET /api/v1/sports/:id/thresholds retorna 200 con el umbral o null"
+  - "PATCH /api/v1/sports/:id/thresholds/:tid actualiza el umbral y retorna 200"
+  - "Los seed data contienen umbrales correctos: paddle_surf (12kt, 0.5m), kayak (15kt, 1.0m), vela (25kt, 2.0m), surf (30kt, 3.0m)"
+  - "DELETE /api/v1/sports/:id retorna 409 si el deporte tiene reservas futuras"
+  - "Todos los tests unitarios y de integración pasan"
+  - "Validaciones de DTO rechazan datos inválidos con 400 Bad Request"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — framework, DB configurados"
+    - "B2: Modelos de Datos — tablas sports y weather_thresholds creadas con migraciones"
+    - "B4: Autenticación y Autorización — JWT guard y decorador @Roles() disponibles"
+    - "B5: Gestión de Escuelas y Spots — SchoolService.findById() disponible"
+  integrates_with:
+    - "B7: Gestión de Instructores — instructores vinculados a deportes"
+    - "B9: Motor de Decisión Climática — consume WeatherThreshold para evaluar condiciones vs umbrales"
+    - "B10: Sistema de Reservas — consume SportService para validar disponibilidad"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - SportService.findAll(filters) → lista de deportes filtrada
+    - SportService.findById(id) → deporte por id
+    - SportService.findBySchool(schoolId) → deportes de una escuela
+    - WeatherThresholdService.findBySport(sportId) → umbral del deporte (usado por B9)
+    - GET /api/v1/sports → endpoint REST para frontend
+    - GET /api/v1/sports/:id → endpoint REST para frontend
+    - GET /api/v1/sports/:id/thresholds → endpoint REST para frontend
+    - Seed data con umbrales por defecto para deportes comunes
+    - Tablas sports y weather_thresholds en PostgreSQL con datos gestionados
+
+verification: "npm test -- --testPathPattern=sports"

@@ -1,0 +1,365 @@
+# ============================================================
+# SPEC B10 — Sistema de Reservas y Disponibilidad
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Sistema de Reservas y Disponibilidad"
+purpose: "Implementar búsqueda de clases, CRUD de reservas con validación de disponibilidad integrada con el semáforo meteorológico"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulos implementados:
+    - Auth (B4): JWT guard, decorador @CurrentUser(), roles (cliente|instructor|admin)
+    - Instructores y Horarios (B7):
+        ScheduleService.findByDate(sportId, date) → Schedule[]
+        InstructorService.findById(id) → Instructor
+    - Motor de Decisión Climática (B9):
+        WeatherDecisionService.evaluateConditions(spotId, sportId, date, start, end) → TimeSlotEvaluation
+        WeatherDecisionService.evaluateDayForSpot(spotId, sportId, date) → TimeSlotEvaluation[]
+  Tablas creadas:
+    - bookings (id, user_id, schedule_id, sport_id, instructor_id, spot_id,
+        date, start_time, end_time, status, participants, notes, created_at, updated_at)
+    - schedules (id, instructor_id, sport_id, spot_id, day_of_week, start_time,
+        end_time, max_participants, recurring, valid_from, valid_until)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear DTOs en src/modules/booking/dto/"
+    detail: |
+      SearchClassesDTO (query params):
+        sport_id?: string
+        spot_id?: string
+        date: string              // YYYY-MM-DD (requerido)
+        level?: string            // principiante|intermedio|avanzado
+        min_time?: string         // HH:mm
+        max_time?: string         // HH:mm
+
+      CreateBookingDTO:
+        schedule_id: string       // franja horaria a reservar
+        date: string              // YYYY-MM-DD
+        participants: number      // default 1
+        notes?: string
+
+      UpdateBookingDTO:
+        date?: string             // nueva fecha (reprogramar)
+        participants?: number
+        notes?: string
+
+      BookingResponseDTO:
+        id: string
+        user: { id, name, email }
+        sport: { id, name, level }
+        instructor: { id, name }
+        spot: { id, name }
+        date: string
+        start_time: string
+        end_time: string
+        status: BookingStatus
+        participants: number
+        weather_evaluation: TimeSlotEvaluation  // semáforo meteo
+        created_at: Date
+
+      ClassAvailabilityDTO:
+        schedule: Schedule
+        sport: Sport
+        instructor: { id, name, avatar_url }
+        spot: { id, name }
+        date: string
+        start_time: string
+        end_time: string
+        available_spots: number     // plazas disponibles
+        total_spots: number         // aforo total
+        weather: TimeSlotEvaluation // semáforo
+        price: number
+        can_book: boolean           // false si cancelado por clima o sin plazas
+
+  - step: 2
+    action: "Crear enum BookingStatus en src/modules/booking/types.ts"
+    detail: |
+      enum BookingStatus {
+        CONFIRMED = 'confirmed',
+        WAITLIST = 'waitlist',
+        CANCELLED_BY_USER = 'cancelled_user',
+        CANCELLED_BY_WEATHER = 'cancelled_weather',
+        CANCELLED_BY_ADMIN = 'cancelled_admin',
+        COMPLETED = 'completed',
+        NO_SHOW = 'no_show'
+      }
+
+      Transiciones válidas:
+        CONFIRMED → CANCELLED_BY_USER, CANCELLED_BY_WEATHER, CANCELLED_BY_ADMIN, COMPLETED, NO_SHOW
+        WAITLIST → CONFIRMED, CANCELLED_BY_USER
+        Todo estado cancelado o completado es FINAL (no se puede cambiar)
+
+  - step: 3
+    action: "Implementar BookingService en src/modules/booking/booking.service.ts"
+    detail: |
+      Inyectar: BookingRepository, ScheduleService, WeatherDecisionService,
+                SportService, InstructorService, SpotService, EventEmitter.
+
+      === BÚSQUEDA DE DISPONIBILIDAD ===
+
+      async searchAvailableClasses(query: SearchClassesDTO): Promise<ClassAvailabilityDTO[]>
+        1. Obtener schedules que coincidan con los filtros (deporte, spot, día de semana)
+        2. Para cada schedule:
+           a. Contar bookings confirmadas para esa fecha → occupied
+           b. available_spots = schedule.max_participants - occupied
+           c. Obtener evaluación meteorológica para ese slot via WeatherDecisionService
+           d. can_book = available_spots > 0 AND weather.decision !== 'cancelled'
+        3. Ordenar: primero los que can_book=true, luego por hora
+        4. Retornar array de ClassAvailabilityDTO
+
+      === CREAR RESERVA ===
+
+      async createBooking(userId: string, dto: CreateBookingDTO): Promise<BookingResponseDTO>
+        1. Obtener schedule por ID, validar que existe
+        2. Validar que la fecha solicitada es futura
+        3. Validar que la fecha corresponde al day_of_week del schedule
+        4. Obtener evaluación meteorológica:
+           - Si CANCELLED → lanzar error 409: "Clase cancelada por condiciones meteorológicas"
+        5. Contar bookings existentes para ese schedule+fecha
+        6. Si plazas llenas:
+           a. Crear booking con status WAITLIST
+           b. Retornar con mensaje indicando posición en lista de espera
+        7. Si hay plazas:
+           a. Verificar que el usuario no tiene ya una booking para ese slot
+           b. Crear booking con status CONFIRMED
+           c. Emitir evento 'booking.created' (para B13 notificaciones)
+        8. Loggear decisión meteorológica via WeatherDecisionService.logDecision()
+        9. Retornar BookingResponseDTO con weather_evaluation incluida
+
+      === CANCELAR RESERVA ===
+
+      async cancelBooking(userId: string, bookingId: string): Promise<BookingResponseDTO>
+        1. Obtener booking, validar que pertenece al usuario
+        2. Validar que status es CONFIRMED o WAITLIST
+        3. Actualizar status a CANCELLED_BY_USER
+        4. Si había lista de espera para ese slot:
+           a. Promover al primero de WAITLIST → CONFIRMED
+           b. Emitir evento 'booking.promoted_from_waitlist'
+        5. Emitir evento 'booking.cancelled' (para B12 reembolso, B13 notificación)
+        6. Retornar booking actualizado
+
+      === MODIFICAR RESERVA ===
+
+      async updateBooking(userId: string, bookingId: string, dto: UpdateBookingDTO): Promise<BookingResponseDTO>
+        1. Obtener booking, validar pertenencia y estado CONFIRMED
+        2. Si cambia fecha:
+           a. Validar disponibilidad en nueva fecha
+           b. Evaluar meteo para nueva fecha
+           c. Si no hay plazas o meteo CANCELLED → rechazar
+           d. Liberar plaza antigua (promover waitlist si hay)
+        3. Actualizar booking
+        4. Emitir evento 'booking.updated'
+        5. Retornar booking actualizado
+
+      === CANCELACIÓN POR CLIMA (llamado desde B11) ===
+
+      async cancelByWeather(scheduleId: string, date: string, reason: string): Promise<void>
+        1. Obtener todas las bookings CONFIRMED para ese schedule+fecha
+        2. Actualizar cada una a CANCELLED_BY_WEATHER
+        3. Para cada booking:
+           a. Emitir evento 'booking.cancelled_weather' (para B12 reembolso automático)
+           b. Emitir evento 'booking.cancelled' (para B13 notificación)
+        4. Loggear cantidad de bookings canceladas
+
+      === CONSULTAS ===
+
+      async getMyBookings(userId: string, status?: BookingStatus): Promise<BookingResponseDTO[]>
+        → Retornar bookings del usuario con weather evaluation actual
+
+      async getBookingsForSchedule(scheduleId: string, date: string): Promise<BookingResponseDTO[]>
+        → Para instructores: ver alumnos del día
+
+      async getBookingById(bookingId: string): Promise<BookingResponseDTO>
+        → Detalle de una reserva con meteo
+
+  - step: 4
+    action: "Implementar BookingController en src/modules/booking/booking.controller.ts"
+    detail: |
+      @Controller('api/bookings')
+
+      @Get('search')
+      @Roles('cliente', 'instructor', 'admin')
+      async searchClasses(@Query() query: SearchClassesDTO): Promise<ClassAvailabilityDTO[]>
+        → Validar que date es obligatorio
+        → Llamar BookingService.searchAvailableClasses()
+
+      @Post()
+      @Roles('cliente')
+      async create(@CurrentUser() user, @Body() dto: CreateBookingDTO): Promise<BookingResponseDTO>
+        → 201 si CONFIRMED
+        → 202 si WAITLIST
+        → 409 si cancelada por clima
+        → 409 si el usuario ya tiene reserva en ese slot
+
+      @Get('my')
+      @Roles('cliente')
+      async getMyBookings(@CurrentUser() user, @Query('status') status?: string): Promise<BookingResponseDTO[]>
+
+      @Get(':id')
+      @Roles('cliente', 'instructor', 'admin')
+      async getById(@Param('id') id: string, @CurrentUser() user): Promise<BookingResponseDTO>
+        → Validar acceso: cliente solo ve las suyas, instructor las de sus clases, admin todas
+
+      @Patch(':id')
+      @Roles('cliente')
+      async update(@CurrentUser() user, @Param('id') id: string, @Body() dto: UpdateBookingDTO): Promise<BookingResponseDTO>
+
+      @Delete(':id')
+      @Roles('cliente')
+      async cancel(@CurrentUser() user, @Param('id') id: string): Promise<BookingResponseDTO>
+        → Internamente llama cancelBooking()
+
+      @Get('schedule/:scheduleId')
+      @Roles('instructor', 'admin')
+      async getBySchedule(@Param('scheduleId') id: string, @Query('date') date: string): Promise<BookingResponseDTO[]>
+        → Lista de alumnos para una franja (panel instructor)
+
+  - step: 5
+    action: "Implementar listener de eventos meteorológicos"
+    detail: |
+      En src/modules/booking/listeners/weather-cancel.listener.ts:
+
+      @OnEvent('weather.slot.cancelled')
+      async handleWeatherCancellation(payload: { scheduleId: string, date: string, reasons: string[] })
+        → Llamar BookingService.cancelByWeather(payload.scheduleId, payload.date, payload.reasons.join('; '))
+
+      NOTA: Este listener conecta B9 (decisión) → B10 (reservas) → B11 (cancelación automática).
+      B11 orquesta el flujo completo, pero este listener permite reacción directa.
+
+  - step: 6
+    action: "Implementar promoción automática de lista de espera"
+    detail: |
+      En BookingService, método privado:
+
+      private async promoteFromWaitlist(scheduleId: string, date: string): Promise<void>
+        1. Buscar la booking más antigua con status WAITLIST para ese schedule+fecha
+        2. Si existe:
+           a. Actualizar status a CONFIRMED
+           b. Emitir evento 'booking.promoted_from_waitlist' { bookingId, userId }
+           c. Emitir evento para notificación al usuario
+
+  - step: 7
+    action: "Escribir tests unitarios en src/modules/booking/__tests__/booking.service.spec.ts"
+    detail: |
+      Tests de búsqueda:
+        - "should return available classes with weather evaluation"
+        - "should mark can_book=false when weather is CANCELLED"
+        - "should mark can_book=false when no spots available"
+        - "should filter by sport, spot, date, and level"
+        - "should sort bookable classes first, then by time"
+
+      Tests de creación:
+        - "should create booking with status CONFIRMED when spots available"
+        - "should create booking with status WAITLIST when full"
+        - "should reject booking when weather is CANCELLED (409)"
+        - "should reject duplicate booking for same user+slot (409)"
+        - "should reject booking for past dates"
+        - "should emit booking.created event on success"
+
+      Tests de cancelación:
+        - "should cancel booking and update status to cancelled_user"
+        - "should promote first waitlist entry when a spot opens"
+        - "should reject cancellation of already cancelled booking"
+        - "should emit booking.cancelled event"
+
+      Tests de cancelación por clima:
+        - "should cancel all confirmed bookings for a schedule+date"
+        - "should emit booking.cancelled_weather for each booking"
+        - "should not cancel already cancelled bookings"
+
+      Tests de modificación:
+        - "should allow date change if new slot available"
+        - "should reject date change if new slot is full"
+        - "should reject date change if weather is CANCELLED"
+
+  - step: 8
+    action: "Escribir tests de integración en src/modules/booking/__tests__/booking.integration.spec.ts"
+    detail: |
+      Tests e2e:
+        - "GET /api/bookings/search?date=X returns available classes with semáforo"
+        - "POST /api/bookings creates confirmed booking (201)"
+        - "POST /api/bookings creates waitlist booking when full (202)"
+        - "POST /api/bookings rejects when weather cancelled (409)"
+        - "DELETE /api/bookings/:id cancels and promotes waitlist"
+        - "GET /api/bookings/my returns user bookings"
+        - "GET /api/bookings/schedule/:id?date=X returns students for instructor"
+        - "PATCH /api/bookings/:id allows reschedule"
+        - "User A cannot see User B bookings (401/403)"
+        - "Instructor can see bookings for their classes only"
+
+  - step: 9
+    action: "Actualizar documentación"
+    detail: |
+      Añadir a ARCHITECTURE.md:
+        - Sección "Booking System" con diagrama de estados de reserva
+        - Flujo de promoción desde waitlist
+        - Integración con semáforo meteorológico
+      Añadir a FUNCTIONAL_FLOWS.md:
+        - "Buscar y reservar clase" (actor: Usuario)
+        - "Cancelar reserva" (actor: Usuario)
+        - "Ver alumnos del día" (actor: Instructor)
+        - "Cancelación automática por clima" (actor: Sistema)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "No se puede reservar si el semáforo es CANCELLED — retornar 409"
+  - "Si el semáforo es WARNING, se permite reservar pero se muestra advertencia"
+  - "Un usuario no puede tener dos reservas para el mismo slot"
+  - "La cancelación de un CONFIRMED promueve automáticamente al primer WAITLIST"
+  - "Transiciones de estado son estrictas — estados finales no se pueden revertir"
+  - "El cliente solo ve sus propias reservas, el instructor las de sus clases"
+  - "Todas las fechas/horas en UTC"
+  - "La búsqueda siempre incluye evaluación meteorológica en la respuesta"
+  - "Los eventos emitidos son la interfaz con B11 (cancelación), B12 (pagos) y B13 (notificaciones)"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "GET /api/bookings/search retorna clases con semáforo meteorológico (verde/amarillo/rojo)"
+  - "POST /api/bookings con meteo APPROVED retorna 201 CONFIRMED"
+  - "POST /api/bookings con meteo CANCELLED retorna 409"
+  - "POST /api/bookings con clase llena retorna 202 WAITLIST"
+  - "DELETE /api/bookings/:id cancela y promueve automáticamente de waitlist"
+  - "PATCH /api/bookings/:id permite reprogramación si nueva fecha disponible"
+  - "Evento weather.slot.cancelled cancela todas las bookings del slot"
+  - "Un usuario no puede reservar dos veces el mismo slot"
+  - "Un cliente no puede acceder a reservas de otro cliente"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B4: Auth y Roles — JWT guard, @CurrentUser(), @Roles()"
+    - "B7: Instructores y Horarios — ScheduleService, InstructorService"
+    - "B9: Motor de Decisión Climática — WeatherDecisionService.evaluateConditions()"
+  integrates_with:
+    - "B11: Cancelación Automática — escucha weather.slot.cancelled, llama cancelByWeather()"
+    - "B12: Pagos — consume evento booking.created (cobro), booking.cancelled_weather (reembolso)"
+    - "B13: Notificaciones — consume eventos booking.created, booking.cancelled, booking.promoted_from_waitlist"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - BookingService.searchAvailableClasses() → para frontend buscador
+    - BookingService.cancelByWeather() → para B11 cancelación automática
+    - GET /api/bookings/search → frontend dashboard
+    - POST/PATCH/DELETE /api/bookings → frontend flujo de reserva
+    - GET /api/bookings/my → frontend historial usuario
+    - GET /api/bookings/schedule/:id → frontend panel instructor
+    - Eventos: booking.created, booking.cancelled, booking.cancelled_weather,
+      booking.updated, booking.promoted_from_waitlist → para B11, B12, B13
+    - Tabla bookings con histórico completo → para B14 reportes
+
+verification: "npm test -- --testPathPattern=booking"

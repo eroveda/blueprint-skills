@@ -1,0 +1,257 @@
+# ============================================================
+# SPEC B11 — Cancelación Automática y Reprogramación
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Cancelación Automática y Reprogramación"
+purpose: "Implementar el proceso automático que cancela reservas cuando el motor de decisión climática marca CANCELADO, sugiere fechas alternativas y dispara reembolsos y notificaciones"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulos implementados:
+    - Motor de Decisión Climática (B9):
+        WeatherDecisionService.evaluateConditions(spotId, sportId, date, start, end) → TimeSlotEvaluation
+        WeatherDecisionService.evaluateDayForSpot(spotId, sportId, date) → TimeSlotEvaluation[]
+    - Sistema de Reservas (B10):
+        BookingService.cancelByWeather(scheduleId, date, reason) → void
+        BookingService.searchAvailableClasses(query) → ClassAvailabilityDTO[]
+        Eventos: booking.cancelled_weather, booking.cancelled
+    - Pagos (B12):
+        PaymentService escucha evento booking.cancelled_weather → reembolso automático
+    - Notificaciones (B13):
+        NotificationService escucha evento booking.cancelled → aviso al usuario
+  Tablas disponibles:
+    - bookings (id, user_id, schedule_id, sport_id, instructor_id, spot_id,
+        date, start_time, end_time, status, participants, notes, created_at, updated_at)
+    - schedules (id, instructor_id, sport_id, spot_id, day_of_week, start_time,
+        end_time, max_participants, recurring, valid_from, valid_until)
+    - weather_decision_log (id, booking_id, sport_id, weather_data_id, decision, reason, decided_at)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo en src/modules/auto-cancellation/"
+    detail: |
+      Estructura de archivos:
+        src/modules/auto-cancellation/
+          auto-cancellation.module.ts
+          auto-cancellation.service.ts
+          auto-cancellation.scheduler.ts
+          rescheduling.service.ts
+          dto/
+            reschedule-suggestion.dto.ts
+          __tests__/
+            auto-cancellation.service.spec.ts
+            auto-cancellation.scheduler.spec.ts
+            rescheduling.service.spec.ts
+
+  - step: 2
+    action: "Crear DTOs en src/modules/auto-cancellation/dto/"
+    detail: |
+      RescheduleSuggestionDTO:
+        original_booking_id: string
+        suggested_date: string          // YYYY-MM-DD
+        schedule_id: string
+        sport: { id, name }
+        spot: { id, name }
+        instructor: { id, name }
+        start_time: string              // HH:mm
+        end_time: string                // HH:mm
+        available_spots: number
+        weather_evaluation: TimeSlotEvaluation  // debe ser verde
+
+      CancellationResultDTO:
+        cancelled_bookings_count: number
+        affected_users: string[]
+        reason: string
+        suggestions_generated: number
+
+  - step: 3
+    action: "Implementar AutoCancellationScheduler en src/modules/auto-cancellation/auto-cancellation.scheduler.ts"
+    detail: |
+      Usar @Cron o @Interval para ejecutar cada hora.
+
+      @Cron('0 * * * *')  // cada hora en punto
+      async evaluateUpcomingSlots(): Promise<void>
+        1. Calcular ventana: desde ahora hasta ahora + 24 horas
+        2. Obtener todos los schedules que tengan bookings CONFIRMED dentro de esa ventana
+        3. Para cada schedule+fecha:
+           a. Llamar WeatherDecisionService.evaluateConditions(spotId, sportId, date, start, end)
+           b. Si resultado es CANCELLED:
+              - Llamar AutoCancellationService.cancelAndReschedule(scheduleId, date, reasons)
+           c. Si resultado cambia de CANCELLED a APPROVED (mejora meteo):
+              - Loggear la mejora pero NO reactivar automáticamente (requiere acción manual)
+        4. Loggear resumen: franjas evaluadas, cancelaciones ejecutadas
+
+      NOTA: El scheduler NO evalúa franjas pasadas. Solo futuras dentro de 24h.
+
+  - step: 4
+    action: "Implementar AutoCancellationService en src/modules/auto-cancellation/auto-cancellation.service.ts"
+    detail: |
+      Inyectar: BookingService, ReschedulingService, EventEmitter,
+                WeatherDecisionService, ScheduleService.
+
+      async cancelAndReschedule(scheduleId: string, date: string, reasons: string[]): Promise<CancellationResultDTO>
+        1. Llamar BookingService.cancelByWeather(scheduleId, date, reasons.join('; '))
+           → Esto actualiza bookings a CANCELLED_BY_WEATHER
+           → Esto emite booking.cancelled_weather para cada booking (B12 reembolso)
+           → Esto emite booking.cancelled para cada booking (B13 notificación)
+        2. Obtener lista de bookings que fueron canceladas (para sugerencias)
+        3. Para cada booking cancelada:
+           a. Llamar ReschedulingService.findAlternatives(booking)
+           b. Emitir evento 'cancellation.suggestions_ready' con:
+              { userId, bookingId, reason, suggestions: RescheduleSuggestionDTO[] }
+           c. El evento es consumido por B13 para enviar notificación con sugerencias
+        4. Retornar CancellationResultDTO con resumen
+
+      async processSingleBookingCancellation(bookingId: string, reason: string): Promise<void>
+        → Para cancelaciones individuales disparadas por cambio de meteo en tiempo real
+        1. Obtener booking por ID
+        2. Cancelar vía BookingService
+        3. Generar sugerencias
+        4. Emitir eventos
+
+  - step: 5
+    action: "Implementar ReschedulingService en src/modules/auto-cancellation/rescheduling.service.ts"
+    detail: |
+      Inyectar: ScheduleService, WeatherDecisionService, BookingRepository, SportService.
+
+      async findAlternatives(booking: Booking, daysAhead: number = 7): Promise<RescheduleSuggestionDTO[]>
+        1. Obtener sport_id y spot_id de la booking original
+        2. Para cada día en los próximos {daysAhead} días:
+           a. Buscar schedules del mismo deporte en el mismo spot (o spots cercanos)
+           b. Para cada schedule encontrado:
+              - Evaluar meteo: WeatherDecisionService.evaluateConditions(...)
+              - Solo incluir si evaluación es APPROVED (semáforo verde)
+              - Calcular plazas disponibles
+              - Solo incluir si hay plazas
+           c. Agregar a lista de sugerencias
+        3. Ordenar sugerencias:
+           - Primero: mismo instructor (si es posible)
+           - Luego: fecha más cercana
+           - Luego: misma hora del día
+        4. Limitar a máximo 5 sugerencias
+        5. Retornar array de RescheduleSuggestionDTO
+
+      async acceptSuggestion(userId: string, originalBookingId: string, scheduleId: string, date: string): Promise<BookingResponseDTO>
+        1. Validar que la booking original pertenece al usuario y está CANCELLED_BY_WEATHER
+        2. Crear nueva booking vía BookingService.createBooking()
+        3. Vincular nueva booking con la original (campo rescheduled_from)
+        4. Retornar la nueva booking
+
+  - step: 6
+    action: "Implementar listener de eventos meteorológicos en tiempo real"
+    detail: |
+      En src/modules/auto-cancellation/listeners/weather-change.listener.ts:
+
+      @OnEvent('weather.data.updated')
+      async handleWeatherDataUpdate(payload: { spotId: string, date: string })
+        1. Obtener todos los schedules con bookings CONFIRMED para ese spot+fecha
+        2. Re-evaluar condiciones para cada schedule
+        3. Si alguno pasa a CANCELLED:
+           → Llamar AutoCancellationService.cancelAndReschedule()
+        4. Si alguno pasa de WARNING a CANCELLED:
+           → Mismo flujo de cancelación
+        5. Si alguno mejora (CANCELLED → APPROVED):
+           → Solo loggear, no reactivar automáticamente
+
+      NOTA: Este listener complementa al scheduler. El scheduler es periódico (cada hora),
+      el listener reacciona en tiempo real cuando llegan nuevos datos meteorológicos.
+
+  - step: 7
+    action: "Escribir tests unitarios en src/modules/auto-cancellation/__tests__/"
+    detail: |
+      auto-cancellation.service.spec.ts:
+        - "should cancel all confirmed bookings when weather is CANCELLED"
+        - "should emit booking.cancelled_weather event for each booking"
+        - "should generate reschedule suggestions for each cancelled booking"
+        - "should not cancel already cancelled bookings"
+        - "should emit cancellation.suggestions_ready with alternatives"
+
+      auto-cancellation.scheduler.spec.ts:
+        - "should evaluate all upcoming slots within 24h window"
+        - "should trigger cancellation when slot evaluation is CANCELLED"
+        - "should not trigger cancellation for APPROVED slots"
+        - "should not trigger cancellation for WARNING slots"
+        - "should skip past time slots"
+        - "should log summary of evaluated slots and cancellations"
+
+      rescheduling.service.spec.ts:
+        - "should find alternative dates with green weather in next 7 days"
+        - "should only suggest slots with available capacity"
+        - "should prioritize same instructor when available"
+        - "should prioritize closest date"
+        - "should limit suggestions to 5 maximum"
+        - "should not suggest slots with CANCELLED or WARNING weather"
+        - "should allow user to accept a suggestion and create new booking"
+
+  - step: 8
+    action: "Escribir tests de integración en src/modules/auto-cancellation/__tests__/auto-cancellation.integration.spec.ts"
+    detail: |
+      Tests de flujo completo:
+        - "Simular cambio de meteo a CANCELLED → verificar cascada completa:
+           cancelación de bookings → reembolso → notificación → sugerencias"
+        - "Scheduler evalúa franja con meteo CANCELLED → cancela bookings automáticamente"
+        - "Scheduler evalúa franja con meteo APPROVED → no cancela nada"
+        - "Listener reacciona a weather.data.updated → cancela si procede"
+        - "ReschedulingService sugiere alternativas con semáforo verde"
+        - "Usuario acepta sugerencia → nueva booking creada correctamente"
+        - "No se generan sugerencias si no hay slots verdes en 7 días"
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "El scheduler se ejecuta cada hora y evalúa las próximas 24 horas"
+  - "Solo se cancelan bookings con status CONFIRMED — no WAITLIST ni ya canceladas"
+  - "Las sugerencias de reprogramación solo incluyen slots con semáforo verde (APPROVED)"
+  - "Máximo 5 sugerencias por booking cancelada"
+  - "La mejora de meteo (CANCELLED → APPROVED) NO reactiva bookings automáticamente"
+  - "El reembolso se dispara vía evento booking.cancelled_weather — no se procesa aquí"
+  - "La notificación se dispara vía evento booking.cancelled — no se envía aquí"
+  - "Todas las fechas/horas en UTC"
+  - "El scheduler no debe evaluar franjas ya pasadas"
+  - "Si el scheduler y el listener detectan la misma cancelación, debe ser idempotente"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El scheduler ejecuta cada hora y evalúa slots de las próximas 24h"
+  - "Cuando una franja pasa a CANCELLED, todas las bookings CONFIRMED se cancelan"
+  - "Se emite evento booking.cancelled_weather por cada booking cancelada (trigger de reembolso)"
+  - "Se emite evento booking.cancelled por cada booking cancelada (trigger de notificación)"
+  - "Se generan sugerencias de reprogramación con slots verdes en los próximos 7 días"
+  - "Las sugerencias priorizan mismo instructor, fecha cercana y misma hora"
+  - "Se emite evento cancellation.suggestions_ready con las alternativas"
+  - "El listener reacciona a weather.data.updated y cancela en tiempo real si procede"
+  - "La cancelación es idempotente — no falla si ya fue cancelada"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B9: Motor de Decisión Climática — WeatherDecisionService.evaluateConditions()"
+    - "B10: Sistema de Reservas — BookingService.cancelByWeather(), BookingService.searchAvailableClasses()"
+  integrates_with:
+    - "B12: Pagos — consume evento booking.cancelled_weather para reembolso automático"
+    - "B13: Notificaciones — consume eventos booking.cancelled y cancellation.suggestions_ready"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - AutoCancellationService.cancelAndReschedule() → invocado por scheduler y listener
+    - ReschedulingService.findAlternatives() → sugerencias de reprogramación
+    - ReschedulingService.acceptSuggestion() → usuario acepta sugerencia
+    - Eventos: cancellation.suggestions_ready → para B13 notificación con sugerencias
+    - Scheduler cron cada hora → evaluación automática continua
+    - Listener weather.data.updated → reacción en tiempo real
+    - Logs de cancelaciones automáticas → para B14 reportes
+
+verification: "npm test -- --testPathPattern=auto-cancellation"

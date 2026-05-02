@@ -1,0 +1,374 @@
+# ============================================================
+# SPEC B7 — Gestión de Instructores y Horarios
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Gestión de Instructores y Horarios"
+purpose: "Implementar CRUD de instructores vinculados a escuelas y deportes, gestión de disponibilidad horaria con franjas semanales recurrentes, y consulta de horarios por fecha para el sistema de reservas"
+category: "CONSTRUCTION"
+
+input_context: |
+  Proyecto inicializado con framework backend (Node.js/NestJS recomendado).
+  Base de datos PostgreSQL configurada con las siguientes tablas ya creadas:
+    - instructors (id, user_id, school_id, sports[], bio, certifications, active, created_at)
+    - schedules (id, instructor_id, sport_id, spot_id, day_of_week, start_time, end_time, max_participants, recurring, valid_from, valid_until, created_at)
+  Módulo de autenticación (B4) implementado — JWT guard y decorador @Roles() disponibles.
+  Módulo de escuelas (B5) implementado — SchoolService.findById() y SpotService.findById() disponibles.
+  Módulo de deportes (B6) implementado — SportService.findById() disponible.
+  Variables de entorno disponibles:
+    - DATABASE_URL
+    - JWT_SECRET
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo src/modules/instructors/instructors.module.ts"
+    detail: |
+      Registrar InstructorService, InstructorController, ScheduleService, ScheduleController.
+      Importar AuthModule (para guards), SchoolModule, SportModule, TypeORM/Prisma.
+      Exportar InstructorService y ScheduleService para consumo por otros módulos.
+
+  - step: 2
+    action: "Crear DTOs en src/modules/instructors/dto/"
+    detail: |
+      CreateInstructorDTO:
+        user_id: string (required, UUID, referencia a tabla users)
+        school_id: string (required, UUID, referencia a tabla schools)
+        sports: string[] (required, array de UUIDs de deportes, mínimo 1)
+        bio: string (optional, max 1000)
+        certifications: string (optional, max 500)
+        active: boolean (default true)
+
+      UpdateInstructorDTO: Partial<CreateInstructorDTO> (user_id y school_id no editables)
+
+      CreateScheduleDTO:
+        sport_id: string (required, UUID)
+        spot_id: string (required, UUID)
+        day_of_week: number (required, 0=domingo a 6=sábado)
+        start_time: string (required, formato HH:mm, ej: "09:00")
+        end_time: string (required, formato HH:mm, ej: "11:00")
+        max_participants: number (required, min 1, max 50)
+        recurring: boolean (default true)
+        valid_from: Date (required, fecha de inicio de validez)
+        valid_until: Date (optional, fecha de fin de validez, null = indefinido)
+
+      UpdateScheduleDTO: Partial<CreateScheduleDTO>
+
+      Usar class-validator para decoradores de validación.
+      Validar que end_time > start_time.
+      Validar que valid_until > valid_from (si valid_until se proporciona).
+
+  - step: 3
+    action: "Implementar InstructorService en src/modules/instructors/instructor.service.ts"
+    detail: |
+      Inyectar: InstructorRepository, SchoolService, SportService.
+
+      Métodos:
+
+      async create(dto: CreateInstructorDTO): Promise<Instructor>
+        → Verificar que la escuela existe via SchoolService.findById(dto.school_id)
+        → Verificar que todos los sports[] existen via SportService.findById() para cada uno
+        → Verificar que los deportes pertenecen a la misma escuela
+        → Verificar que no existe ya un instructor con el mismo user_id en la misma escuela
+        → Crear instructor, retornar entidad creada
+
+      async findAll(filters?: { school_id?: string, sport_id?: string, active?: boolean }): Promise<Instructor[]>
+        → Retornar instructores filtrados
+        → Si sport_id, filtrar los que tienen ese deporte en su array sports[]
+        → Ordenar por nombre del usuario asociado
+
+      async findById(id: string): Promise<Instructor>
+        → Buscar por id con relación al usuario (para obtener nombre), lanzar NotFoundException si no existe
+
+      async findByUserId(userId: string): Promise<Instructor | null>
+        → Buscar instructor por user_id, retornar null si no existe
+        → Usado para que un instructor acceda a su propio perfil
+
+      async findBySchool(schoolId: string): Promise<Instructor[]>
+        → Retornar todos los instructores de una escuela
+
+      async update(id: string, dto: UpdateInstructorDTO, requestingUserId: string): Promise<Instructor>
+        → Verificar existencia
+        → Si el requesting user es el propio instructor, solo puede actualizar bio y certifications
+        → Si el requesting user es admin, puede actualizar todo
+        → Actualizar campos permitidos
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia
+        → Verificar que no tiene horarios futuros activos con reservas
+        → Si tiene, lanzar ConflictException
+        → Eliminar instructor y sus schedules (cascade)
+
+  - step: 4
+    action: "Implementar ScheduleService en src/modules/instructors/schedule.service.ts"
+    detail: |
+      Inyectar: ScheduleRepository, InstructorService, SportService, SpotService.
+
+      Métodos:
+
+      async create(instructorId: string, dto: CreateScheduleDTO): Promise<Schedule>
+        → Verificar que el instructor existe via InstructorService.findById(instructorId)
+        → Verificar que el deporte está en el array sports[] del instructor
+        → Verificar que el spot existe via SpotService.findById(dto.spot_id)
+        → Verificar que no hay solapamiento de horarios para el mismo instructor
+          (mismo day_of_week + rango de horas solapado + mismo periodo de validez)
+        → Crear schedule vinculado al instructor
+
+      async findByInstructor(instructorId: string): Promise<Schedule[]>
+        → Retornar todos los schedules del instructor
+        → Incluir relaciones con sport y spot
+
+      async findById(id: string): Promise<Schedule>
+        → Buscar por id con relaciones, lanzar NotFoundException si no existe
+
+      async findByDate(sportId: string, date: Date): Promise<Schedule[]>
+        → Determinar day_of_week de la fecha proporcionada
+        → Buscar schedules donde:
+          - sport_id = sportId
+          - day_of_week = dayOfWeek calculado
+          - recurring = true o (valid_from <= date <= valid_until)
+          - valid_from <= date
+          - valid_until >= date o valid_until IS NULL
+          - instructor activo
+        → Retornar schedules con relaciones a instructor y spot
+        → ESTE MÉTODO ES CRÍTICO — es consumido por B10 (Sistema de Reservas)
+
+      async update(id: string, dto: UpdateScheduleDTO): Promise<Schedule>
+        → Verificar existencia
+        → Si se cambia day_of_week o horarios, verificar solapamiento
+        → Actualizar campos
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia
+        → Verificar que no tiene reservas futuras vinculadas
+        → Si tiene, lanzar ConflictException
+        → Eliminar schedule
+
+  - step: 5
+    action: "Implementar InstructorController en src/modules/instructors/instructor.controller.ts"
+    detail: |
+      @Controller('api/v1/instructors')
+
+      @Get()
+      async findAll(@Query() filters: { school_id?: string, sport_id?: string })
+        → Requiere autenticación (JWT guard)
+        → Llamar InstructorService.findAll(filters)
+        → Retornar 200 con array de instructores
+
+      @Get(':id')
+      async findById(@Param('id') id: string)
+        → Requiere autenticación
+        → Llamar InstructorService.findById(id)
+        → Retornar 200 con instructor (incluye datos del usuario), o 404
+
+      @Post()
+      async create(@Body() dto: CreateInstructorDTO)
+        → Requiere autenticación + rol admin
+        → Validar DTO
+        → Llamar InstructorService.create(dto)
+        → Retornar 201 con instructor creado
+
+      @Patch(':id')
+      async update(@Param('id') id: string, @Body() dto: UpdateInstructorDTO, @CurrentUser() user)
+        → Requiere autenticación
+        → Si user.role === 'instructor' → solo puede editar su propio perfil (bio, certifications)
+        → Si user.role === 'admin' → puede editar cualquier instructor de su escuela
+        → Llamar InstructorService.update(id, dto, user.id)
+        → Retornar 200 con instructor actualizado
+
+      @Delete(':id')
+      async delete(@Param('id') id: string)
+        → Requiere autenticación + rol admin
+        → Llamar InstructorService.delete(id)
+        → Retornar 204 sin contenido
+
+  - step: 6
+    action: "Implementar ScheduleController en src/modules/instructors/schedule.controller.ts"
+    detail: |
+      @Controller('api/v1/instructors/:instructorId/schedule')
+
+      @Get()
+      async findByInstructor(@Param('instructorId') instructorId: string)
+        → Requiere autenticación
+        → Llamar ScheduleService.findByInstructor(instructorId)
+        → Retornar 200 con array de schedules
+
+      @Post()
+      async create(@Param('instructorId') instructorId: string, @Body() dto: CreateScheduleDTO, @CurrentUser() user)
+        → Requiere autenticación
+        → Si user.role === 'instructor' → solo puede crear schedules para sí mismo
+        → Si user.role === 'admin' → puede crear para cualquier instructor de su escuela
+        → Llamar ScheduleService.create(instructorId, dto)
+        → Retornar 201 con schedule creado
+
+      @Controller('api/v1/schedules')
+
+      @Get(':id')
+      async findById(@Param('id') id: string)
+        → Requiere autenticación
+        → Llamar ScheduleService.findById(id)
+        → Retornar 200 con schedule, o 404
+
+      @Patch(':id')
+      async update(@Param('id') id: string, @Body() dto: UpdateScheduleDTO, @CurrentUser() user)
+        → Requiere autenticación
+        → Verificar que el usuario es el instructor dueño del schedule o admin
+        → Llamar ScheduleService.update(id, dto)
+        → Retornar 200 con schedule actualizado
+
+      @Delete(':id')
+      async delete(@Param('id') id: string, @CurrentUser() user)
+        → Requiere autenticación
+        → Verificar que el usuario es admin o el instructor dueño del schedule
+        → Llamar ScheduleService.delete(id)
+        → Retornar 204 sin contenido
+
+  - step: 7
+    action: "Escribir tests unitarios en src/modules/instructors/__tests__/instructor.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create an instructor linked to school and sports"
+        - "should throw NotFoundException for non-existent school"
+        - "should throw NotFoundException for non-existent sport in sports array"
+        - "should throw ConflictException for duplicate user_id in same school"
+        - "should return instructors filtered by school_id"
+        - "should return instructors filtered by sport_id"
+        - "should return an instructor by id"
+        - "should return an instructor by user_id"
+        - "should allow instructor to update only bio and certifications"
+        - "should allow admin to update all fields"
+        - "should throw ConflictException when deleting instructor with future schedules with bookings"
+        - "should delete an instructor and cascade delete schedules"
+
+      Mockear: InstructorRepository, SchoolService, SportService.
+
+  - step: 8
+    action: "Escribir tests unitarios en src/modules/instructors/__tests__/schedule.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create a schedule for an instructor"
+        - "should throw if sport not in instructor's sports array"
+        - "should throw NotFoundException for non-existent spot"
+        - "should throw ConflictException for overlapping schedule"
+        - "should not throw for non-overlapping schedule on same day"
+        - "should return schedules by instructor"
+        - "should return a schedule by id"
+        - "should find schedules by sport and date (findByDate)"
+        - "should correctly calculate day_of_week from date"
+        - "should filter out expired schedules (valid_until < date)"
+        - "should include schedules with null valid_until"
+        - "should filter out inactive instructors"
+        - "should update a schedule"
+        - "should throw ConflictException when deleting schedule with future bookings"
+        - "should delete a schedule"
+
+      Mockear: ScheduleRepository, InstructorService, SportService, SpotService.
+
+  - step: 9
+    action: "Escribir tests de integración en src/modules/instructors/__tests__/instructors.integration.spec.ts"
+    detail: |
+      Tests con base de datos de test:
+        - "POST /api/v1/instructors → 201 con datos válidos y rol admin"
+        - "POST /api/v1/instructors → 403 con rol cliente"
+        - "POST /api/v1/instructors → 400 con sports array vacío"
+        - "GET /api/v1/instructors → 200 con lista de instructores"
+        - "GET /api/v1/instructors?school_id=X → 200 filtrado por escuela"
+        - "GET /api/v1/instructors?sport_id=X → 200 filtrado por deporte"
+        - "GET /api/v1/instructors/:id → 200 con instructor existente"
+        - "GET /api/v1/instructors/:id → 404 con id inexistente"
+        - "PATCH /api/v1/instructors/:id → 200 instructor editando su bio"
+        - "PATCH /api/v1/instructors/:id → 403 instructor editando otro instructor"
+        - "DELETE /api/v1/instructors/:id → 204 con rol admin"
+        - "POST /api/v1/instructors/:id/schedule → 201 con horario válido"
+        - "POST /api/v1/instructors/:id/schedule → 409 con horario solapado"
+        - "GET /api/v1/instructors/:id/schedule → 200 con horarios del instructor"
+        - "GET /api/v1/schedules/:id → 200 con schedule existente"
+        - "PATCH /api/v1/schedules/:id → 200 actualizando horario"
+        - "DELETE /api/v1/schedules/:id → 204 sin reservas futuras"
+        - "DELETE /api/v1/schedules/:id → 409 con reservas futuras"
+
+  - step: 10
+    action: "Actualizar documentación"
+    detail: |
+      Añadir a ARCHITECTURE.md:
+        - Sección "Instructors & Schedules Module"
+        - Diagrama de relaciones: School → Instructor (1:N), Instructor → Schedule (1:N),
+          Schedule → Sport (N:1), Schedule → Spot (N:1)
+        - Descripción de la lógica de solapamiento de horarios
+      Añadir a FUNCTIONAL_FLOWS.md:
+        - "Admin crea instructor" (actor: Admin)
+        - "Instructor gestiona su disponibilidad" (actor: Instructor)
+        - "Sistema consulta horarios disponibles por fecha" (actor: Sistema, via ScheduleService.findByDate)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Solo admin puede crear y eliminar instructores"
+  - "Admin puede editar cualquier instructor de su escuela"
+  - "Instructores pueden editar su propio perfil (bio, certifications) y gestionar su disponibilidad"
+  - "Un instructor no puede gestionar la disponibilidad de otro instructor"
+  - "Los deportes en el array sports[] del instructor deben pertenecer a la misma escuela"
+  - "No se permite solapamiento de horarios para el mismo instructor (mismo día + horas solapadas + periodo válido)"
+  - "end_time debe ser posterior a start_time"
+  - "valid_until debe ser posterior a valid_from (si se proporciona)"
+  - "day_of_week usa convención JavaScript: 0=domingo, 1=lunes, ..., 6=sábado"
+  - "Formatos de hora: HH:mm en formato 24h"
+  - "No se puede eliminar un instructor o schedule con reservas futuras activas — retornar 409 Conflict"
+  - "ScheduleService.findByDate() debe ser eficiente — usado en cada búsqueda de disponibilidad en B10"
+  - "IDs en formato UUID v4"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "POST /api/v1/instructors crea un instructor vinculado a escuela y deportes (solo admin)"
+  - "POST /api/v1/instructors retorna 403 para usuarios no admin"
+  - "GET /api/v1/instructors retorna 200 con lista filtrable por school_id y sport_id"
+  - "GET /api/v1/instructors/:id retorna 200 con instructor o 404 si no existe"
+  - "PATCH /api/v1/instructors/:id permite a un instructor editar solo su bio y certifications"
+  - "PATCH /api/v1/instructors/:id permite a admin editar todos los campos"
+  - "POST /api/v1/instructors/:id/schedule crea un horario sin solapamiento"
+  - "POST /api/v1/instructors/:id/schedule retorna 409 si hay solapamiento de horarios"
+  - "GET /api/v1/instructors/:id/schedule retorna 200 con horarios del instructor"
+  - "ScheduleService.findByDate(sportId, date) retorna schedules válidos para esa fecha"
+  - "findByDate filtra correctamente por day_of_week, valid_from, valid_until e instructor activo"
+  - "DELETE /api/v1/schedules/:id retorna 409 si hay reservas futuras vinculadas"
+  - "Todos los tests unitarios y de integración pasan"
+  - "Validaciones de DTO rechazan datos inválidos con 400 Bad Request"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — framework, DB configurados"
+    - "B2: Modelos de Datos — tablas instructors y schedules creadas con migraciones"
+    - "B4: Autenticación y Autorización — JWT guard, @Roles(), @CurrentUser() disponibles"
+    - "B5: Gestión de Escuelas y Spots — SchoolService.findById(), SpotService.findById() disponibles"
+  integrates_with:
+    - "B6: Catálogo de Deportes — SportService.findById() para validar deportes del instructor"
+    - "B10: Sistema de Reservas — consume ScheduleService.findByDate(sportId, date) para buscar disponibilidad"
+    - "B11: Cancelación Automática — consulta schedules afectados por cancelación climática"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - InstructorService.findAll(filters) → lista de instructores filtrada
+    - InstructorService.findById(id) → instructor por id
+    - InstructorService.findByUserId(userId) → instructor por user_id
+    - InstructorService.findBySchool(schoolId) → instructores de una escuela
+    - ScheduleService.findByInstructor(instructorId) → horarios de un instructor
+    - ScheduleService.findByDate(sportId, date) → horarios disponibles por deporte y fecha (CRÍTICO para B10)
+    - ScheduleService.findById(id) → schedule por id
+    - GET /api/v1/instructors → endpoint REST para frontend
+    - GET /api/v1/instructors/:id → endpoint REST para frontend
+    - GET /api/v1/instructors/:id/schedule → endpoint REST para frontend
+    - GET /api/v1/schedules/:id → endpoint REST para frontend
+    - Tablas instructors y schedules en PostgreSQL con datos gestionados
+
+verification: "npm test -- --testPathPattern=instructors"

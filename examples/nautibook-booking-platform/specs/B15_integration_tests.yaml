@@ -1,0 +1,346 @@
+# ============================================================
+# SPEC B15 — Tests de Integración del Backend
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Tests de Integración del Backend"
+purpose: "Validar los flujos críticos end-to-end del backend: reserva completa, cancelación climática con reembolso, fallback de API meteorológica y promoción de lista de espera"
+category: "TESTING"
+
+input_context: |
+  Todos los módulos de construcción del backend implementados:
+    - B9: Motor de Decisión Climática operativo
+    - B10: Sistema de Reservas y Disponibilidad operativo
+    - B11: Cancelación Automática y Reprogramación operativo
+    - B12: Pagos, Reembolsos y Bonos/Packs operativo
+  Base de datos PostgreSQL con todas las migraciones aplicadas.
+  Redis configurado y accesible.
+  Variables de entorno para test:
+    - DATABASE_URL (apuntando a test DB o contenedor)
+    - REDIS_URL
+    - STRIPE_SECRET_KEY (test mode)
+    - STORMGLASS_API_KEY (mockeado)
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Configurar entorno de test en test/setup.ts"
+    detail: |
+      Configurar test containers o base de datos in-memory para tests:
+        - Opción A: Testcontainers con PostgreSQL y Redis (recomendado)
+        - Opción B: SQLite in-memory para tests rápidos (con limitaciones)
+
+      Crear beforeAll global:
+        1. Levantar contenedor PostgreSQL de test (o conectar a test DB)
+        2. Levantar contenedor Redis de test
+        3. Ejecutar migraciones
+        4. Configurar módulo NestJS de test con TestingModule
+
+      Crear afterAll global:
+        1. Limpiar todas las tablas (TRUNCATE CASCADE)
+        2. Cerrar conexiones de DB y Redis
+        3. Parar contenedores
+
+      Crear helper resetDatabase() para llamar entre tests:
+        - TRUNCATE todas las tablas en orden correcto (respetar FK)
+
+  - step: 2
+    action: "Crear fixtures en test/fixtures/"
+    detail: |
+      Archivo test/fixtures/schools.fixture.ts:
+        - createTestSchool(): School con datos válidos, timezone 'Europe/Madrid'
+
+      Archivo test/fixtures/spots.fixture.ts:
+        - createTestSpot(schoolId): Spot con lat/lng de Tarifa (36.0143, -5.6044)
+        - createTestSpotCalm(schoolId): Spot con coordenadas de bahía protegida
+
+      Archivo test/fixtures/sports.fixture.ts:
+        - createTestSportSurf(schoolId): Sport surf con umbrales
+          { max_wind: 30kt, max_wave: 3m, min_water_temp: 14°C, action: cancel }
+        - createTestSportKayak(schoolId): Sport kayak con umbrales más estrictos
+          { max_wind: 15kt, max_wave: 1m, min_water_temp: 16°C, action: cancel }
+        - createTestSportSail(schoolId): Sport vela con umbrales
+          { max_wind: 25kt, max_wave: 2.5m, min_water_temp: 12°C, action: warn }
+
+      Archivo test/fixtures/instructors.fixture.ts:
+        - createTestInstructor(schoolId, userId, sportIds[]): Instructor con schedule
+
+      Archivo test/fixtures/schedules.fixture.ts:
+        - createTestSchedule(instructorId, sportId): Schedule lunes-viernes 9:00-13:00
+
+      Archivo test/fixtures/users.fixture.ts:
+        - createTestClient(): User role=cliente con datos válidos
+        - createTestAdmin(): User role=admin
+        - createTestInstructorUser(): User role=instructor
+
+      Archivo test/fixtures/weather.fixture.ts:
+        - createGoodWeather(spotId): WeatherData viento=10kt, olas=0.5m, temp=20°C
+        - createBadWeather(spotId): WeatherData viento=40kt, olas=4m, temp=10°C
+        - createWarningWeather(spotId): WeatherData viento=22kt, olas=2m, temp=15°C
+
+  - step: 3
+    action: "Crear mocks en test/mocks/"
+    detail: |
+      Archivo test/mocks/open-meteo.mock.ts:
+        - Usar nock o MSW para interceptar llamadas a:
+          - https://marine-api.open-meteo.com/v1/marine
+          - https://api.open-meteo.com/v1/forecast
+        - Respuestas predefinidas: goodWeatherResponse, badWeatherResponse
+        - Modo fallo: simular timeout o 500
+
+      Archivo test/mocks/stormglass.mock.ts:
+        - Interceptar GET https://api.stormglass.io/v2/weather/point
+        - Respuestas predefinidas con formato StormGlass
+        - Modo fallo: simular 429 (rate limit) o 500
+
+      Archivo test/mocks/stripe.mock.ts:
+        - Mock de Stripe SDK:
+          - paymentIntents.create() → retorna PI con status 'succeeded'
+          - refunds.create() → retorna refund con status 'succeeded'
+        - Simular webhook: construir evento firmado para:
+          - payment_intent.succeeded
+          - charge.refunded
+
+  - step: 4
+    action: "Implementar test e2e: Flujo de reserva completa en test/e2e/booking-flow.e2e.spec.ts"
+    detail: |
+      Describe: "Booking Flow E2E — Search → Book → Pay → Confirm"
+
+      beforeEach:
+        - resetDatabase()
+        - Crear fixtures: school, spot, sport (surf), instructor, schedule, client user
+        - Insertar good weather data para el spot
+        - Login como cliente → obtener JWT token
+
+      Test: "should complete a full booking flow"
+        1. GET /api/classes?sport=surf&date=tomorrow&spotId={spotId}
+           → Expect 200, array con al menos 1 clase
+           → Expect cada clase tenga weather_status: 'APPROVED'
+        2. POST /api/bookings { classId, participants: 2 }
+           → Expect 201, booking con status: 'confirmed'
+           → Guardar bookingId
+        3. POST /api/payments { bookingId, paymentMethodId: 'pm_card_visa' }
+           → Expect 200, payment con status: 'paid'
+        4. GET /api/bookings/{bookingId}
+           → Expect 200, booking con status: 'confirmed', payment_status: 'paid'
+        5. GET /api/users/me/bookings
+           → Expect 200, array conteniendo el booking creado
+
+      Test: "should prevent booking when class is full"
+        1. Crear sport con max_participants: 2
+        2. POST /api/bookings { classId, participants: 2 } → 201
+        3. POST /api/bookings { classId, participants: 1 } (otro usuario)
+           → Expect 409 con error de aforo completo
+           → Expect body tenga waitlist_available: true
+
+      Test: "should prevent booking when weather is CANCELLED"
+        1. Insertar bad weather data para el spot
+        2. POST /api/bookings { classId, participants: 1 }
+           → Expect 400 con error: "Class cancelled due to weather conditions"
+           → Expect body tenga suggested_alternatives[]
+
+  - step: 5
+    action: "Implementar test e2e: Cancelación por clima en test/e2e/weather-cancellation.e2e.spec.ts"
+    detail: |
+      Describe: "Weather Cancellation E2E — Weather changes → Auto cancel → Refund → Notify"
+
+      beforeEach:
+        - resetDatabase()
+        - Crear fixtures completas: school, spot, sport, instructor, schedule
+        - Crear booking confirmado con pago completado
+        - Mock Stripe refunds
+
+      Test: "should auto-cancel booking when weather turns bad"
+        1. Insertar good weather data → booking está confirmed
+        2. Actualizar weather data a bad weather (simular cambio meteorológico)
+        3. Trigger el weather decision engine (llamar directamente al servicio)
+        4. GET /api/bookings/{bookingId}
+           → Expect status: 'cancelled_weather'
+        5. Verificar WeatherDecisionLog creado con decision: 'cancelled'
+        6. Verificar Payment actualizado con status: 'refunded'
+        7. Verificar Notification creada con type: 'weather_cancel'
+
+      Test: "should send notification with alternative dates on weather cancel"
+        1. Insertar bad weather para mañana, good weather para pasado mañana
+        2. Trigger weather decision engine
+        3. GET /api/notifications?userId={clientId}
+           → Expect notificación con suggested_dates incluyendo pasado mañana
+
+      Test: "should not cancel booking when weather is WARNING (only notify)"
+        1. Insertar warning weather data
+        2. Trigger weather decision engine
+        3. GET /api/bookings/{bookingId}
+           → Expect status sigue 'confirmed' (no cancelado)
+        4. Verificar WeatherDecisionLog con decision: 'warning'
+        5. Verificar Notification creada con type: 'weather_warning'
+
+  - step: 6
+    action: "Implementar test e2e: Fallback API meteo en test/e2e/weather-fallback.e2e.spec.ts"
+    detail: |
+      Describe: "Weather API Fallback E2E — Open-Meteo fails → StormGlass fallback"
+
+      beforeEach:
+        - resetDatabase()
+        - Crear fixtures: school, spot
+        - Resetear circuit breaker state
+
+      Test: "should fallback to StormGlass after 3 Open-Meteo failures"
+        1. Mock Open-Meteo para retornar 500 (3 veces)
+        2. Mock StormGlass para retornar datos válidos
+        3. Trigger weather fetch para el spot (3 llamadas)
+        4. Verificar que tras 3 fallos, se usa StormGlass
+        5. GET /api/weather/{spotId}
+           → Expect 200 con weather_source: 'stormglass'
+
+      Test: "should return to Open-Meteo after recovery timeout"
+        1. Forzar circuit breaker a estado OPEN
+        2. Avanzar tiempo 31 minutos (mock Date.now)
+        3. Mock Open-Meteo para retornar datos válidos
+        4. Trigger weather fetch
+        5. Verificar weather_source: 'open_meteo'
+        6. Verificar circuit breaker vuelve a CLOSED
+
+      Test: "should handle both providers failing gracefully"
+        1. Mock Open-Meteo → 500
+        2. Mock StormGlass → 429 (rate limit)
+        3. Trigger weather fetch
+        4. Verificar que no se borran datos existentes en cache
+        5. GET /api/weather/{spotId}
+           → Expect retorna datos cacheados previos (si existen) o 404
+
+  - step: 7
+    action: "Implementar test e2e: Waitlist promotion en test/e2e/waitlist.e2e.spec.ts"
+    detail: |
+      Describe: "Waitlist Promotion E2E — Cancel → Promote waitlisted → Notify"
+
+      beforeEach:
+        - resetDatabase()
+        - Crear fixtures: school, spot, sport (max_participants: 2), instructor, schedule
+        - Insertar good weather data
+        - Crear 2 bookings confirmados (aforo completo)
+        - Crear 1 booking en waitlist (tercer usuario)
+
+      Test: "should promote waitlisted booking when spot opens up"
+        1. DELETE /api/bookings/{firstBookingId} (cancelar primera reserva)
+           → Expect 200
+        2. GET /api/bookings/{waitlistBookingId}
+           → Expect status cambiado de 'waitlist' a 'confirmed'
+        3. Verificar Notification creada para usuario waitlisted:
+           → type: 'waitlist_promoted', channel incluye 'push'
+
+      Test: "should promote in FIFO order"
+        1. Crear segundo usuario en waitlist
+        2. Cancelar un booking confirmado
+        3. Verificar que el PRIMER waitlisted es promovido (no el segundo)
+        4. Verificar que el segundo sigue en waitlist
+
+  - step: 8
+    action: "Implementar test e2e: Credit packs en test/e2e/credit-packs.e2e.spec.ts"
+    detail: |
+      Describe: "Credit Packs E2E — Purchase → Use → Expiration"
+
+      Test: "should allow booking with credit pack"
+        1. POST /api/credit-packs { sportId, credits: 5 } → pagar con Stripe
+           → Expect 201, pack con total_credits: 5, used_credits: 0
+        2. POST /api/bookings { classId, participants: 1, use_credits: true }
+           → Expect 201, booking confirmed, no Stripe charge
+        3. GET /api/credit-packs/{packId}
+           → Expect used_credits: 1
+
+      Test: "should reject booking with credits when pack is exhausted"
+        1. Crear pack con total_credits: 1, used_credits: 1
+        2. POST /api/bookings { classId, participants: 1, use_credits: true }
+           → Expect 400, error: "No credits available"
+
+  - step: 9
+    action: "Configurar script de ejecución y cobertura"
+    detail: |
+      Añadir scripts a package.json:
+        "test:e2e": "jest --config test/jest-e2e.config.ts --runInBand"
+        "test:e2e:cov": "jest --config test/jest-e2e.config.ts --runInBand --coverage"
+
+      Configurar jest-e2e.config.ts:
+        - testRegex: '.e2e.spec.ts$'
+        - testTimeout: 30000 (30s por test)
+        - setupFilesAfterSetup: ['./test/setup.ts']
+        - coveragePathIgnorePatterns: ['/node_modules/', '/test/']
+        - coverageThreshold:
+            global:
+              branches: 80
+              functions: 80
+              lines: 80
+              statements: 80
+
+  - step: 10
+    action: "Crear test runner helper en test/helpers/test-app.helper.ts"
+    detail: |
+      Función createTestApp(): Promise<INestApplication>
+        1. Crear TestingModule con todos los módulos de la app
+        2. Override providers: Stripe → MockStripe, external APIs → mocks
+        3. Inicializar app con pipes de validación globales
+        4. Retornar app instance para usar con supertest
+
+      Función getAuthToken(app, user): Promise<string>
+        1. POST /api/auth/login con credenciales del usuario
+        2. Retornar access_token del response
+
+      Función createAuthenticatedAgent(app, user): Promise<SuperTestAgent>
+        1. Obtener token
+        2. Retornar supertest agent con Authorization header preconfigurado
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Cada test debe ser independiente — no depender del orden de ejecución"
+  - "Usar resetDatabase() entre tests para evitar contaminación de datos"
+  - "No hacer llamadas reales a APIs externas (Open-Meteo, StormGlass, Stripe) — todo mockeado"
+  - "Tests e2e deben ejecutarse con --runInBand (secuenciales) para evitar conflictos de DB"
+  - "Timeout por test: máximo 30 segundos"
+  - "Coverage mínimo: >80% en ramas, funciones, líneas y sentencias de los flujos críticos"
+  - "Los fixtures deben usar datos realistas (coordenadas reales, precios en EUR, etc.)"
+  - "No mockear la base de datos — usar DB real o contenedor para tests de integración"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El flujo completo de reserva (buscar→reservar→pagar→confirmar) pasa con datos válidos"
+  - "La cancelación automática por cambio meteorológico crea WeatherDecisionLog, reembolso y notificación"
+  - "El fallback de Open-Meteo a StormGlass funciona tras 3 fallos consecutivos"
+  - "La recuperación del circuit breaker funciona tras 30 minutos"
+  - "La promoción de waitlist funciona en orden FIFO al cancelar un booking"
+  - "Los credit packs se descuentan correctamente al reservar"
+  - "La reserva se bloquea cuando el semáforo meteorológico es CANCELLED"
+  - "La reserva se permite con WARNING pero se genera notificación de precaución"
+  - "Todos los tests pasan de forma aislada y en conjunto"
+  - "Coverage de los flujos críticos es >80%"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B9: Motor de Decisión Climática — lógica de evaluación weather vs thresholds"
+    - "B10: Sistema de Reservas y Disponibilidad — CRUD de bookings y búsqueda de clases"
+    - "B11: Cancelación Automática y Reprogramación — proceso de cancelación por clima"
+    - "B12: Pagos, Reembolsos y Bonos/Packs — Stripe integration y credit packs"
+  integrates_with:
+    - "B8: Motor de Integración Meteorológica — weather data y circuit breaker"
+    - "B13: Sistema de Notificaciones — verificar notificaciones generadas"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Suite de tests e2e completa ejecutable con npm run test:e2e
+    - Fixtures reutilizables en test/fixtures/ para cualquier test futuro
+    - Mocks de APIs externas en test/mocks/ reutilizables
+    - Helper createTestApp() para levantar app de test en cualquier spec
+    - Reporte de cobertura generado en coverage/
+    - Configuración de test containers para CI/CD pipeline (B16)
+
+verification: "npm run test:e2e -- --verbose"

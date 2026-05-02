@@ -1,0 +1,330 @@
+# ============================================================
+# SPEC F9 — Panel de Administración de Escuela
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Panel de Administración de Escuela"
+purpose: "Implementar el dashboard de administración con KPIs de negocio, gráficas de ocupación e ingresos, gestión CRUD de deportes con configuración de umbrales meteorológicos, instructores, spots, y visor de decisiones meteorológicas"
+category: "CONSTRUCTION"
+
+input_context: |
+  Design System (F2) y Auth con roles (F3) implementados.
+  AuthGuard con requiredRole='admin' configurado.
+  Backend operativo con endpoints:
+    - GET /api/admin/dashboard/kpis (B14)
+    - GET /api/admin/dashboard/charts?metric=&from=&to= (B14)
+    - CRUD /api/admin/sports (B6)
+    - CRUD /api/admin/instructors (B7)
+    - CRUD /api/admin/spots (B5)
+    - GET /api/admin/weather-decisions?from=&to=&sport=&decision= (B14)
+    - PATCH /api/admin/sports/:id/thresholds (B6)
+    - GET /api/admin/schools/settings (B5)
+    - PATCH /api/admin/schools/settings (B5)
+  Librerías de charts: recharts o chart.js (a instalar).
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear layout del panel admin en app/(dashboard)/admin/layout.tsx"
+    detail: |
+      Layout con Sidebar (F2) configurada para admin:
+        Items:
+          - "Dashboard" (icon BarChart3, path /admin/dashboard)
+          - "Deportes" (icon Activity, path /admin/sports)
+          - "Instructores" (icon Users, path /admin/instructors)
+          - "Spots" (icon MapPin, path /admin/spots)
+          - "Decisiones Clima" (icon CloudSun, path /admin/weather-decisions)
+          - "Configuración" (icon Settings, path /admin/settings)
+
+      Protegido con AuthGuard requiredRole='admin'.
+      Sidebar con logo de la escuela arriba.
+
+  - step: 2
+    action: "Crear dashboard con KPIs en app/(dashboard)/admin/dashboard/page.tsx"
+    detail: |
+      npm install recharts (o @nivo/core @nivo/line @nivo/bar)
+
+      Header:
+        - Título "Dashboard"
+        - DateRangePicker para filtrar período (default: últimos 30 días)
+
+      Grid de KPI cards (4 columnas, mobile: 2 columnas):
+        - Card "Tasa de Ocupación":
+          - Valor: porcentaje (ej: "78%")
+          - Trend: +5% vs período anterior (flecha verde arriba o roja abajo)
+          - Icono: Users
+        - Card "Cancelaciones":
+          - Valor: número total
+          - Subtext: "{n} por clima, {m} por usuario"
+          - Icono: XCircle
+        - Card "Ingresos":
+          - Valor: total en EUR formateado
+          - Trend vs período anterior
+          - Icono: Euro
+        - Card "Deportes Populares":
+          - Top 3 deportes con booking count
+          - Icono: Trophy
+
+      Fetching: useQuery GET /api/admin/dashboard/kpis?from=&to=
+
+  - step: 3
+    action: "Crear gráficas en el dashboard"
+    detail: |
+      Debajo de las KPI cards, grid de 2 columnas:
+
+      Chart 1 — "Ocupación en el tiempo" (AreaChart / LineChart):
+        - Eje X: fechas (diario o semanal según rango)
+        - Eje Y: porcentaje de ocupación
+        - Línea con área bajo la curva en ocean-200
+        - Tooltip con fecha + porcentaje exacto
+        - GET /api/admin/dashboard/charts?metric=occupancy&from=&to=
+
+      Chart 2 — "Cancelaciones por tipo" (BarChart stacked):
+        - Eje X: fechas
+        - Barras apiladas por tipo:
+          - Rojo: cancelaciones por clima (weather)
+          - Gris: cancelaciones por usuario (user)
+          - Azul oscuro: cancelaciones por admin (admin)
+        - GET /api/admin/dashboard/charts?metric=cancellations&from=&to=
+
+      Chart 3 — "Tendencia de ingresos" (LineChart):
+        - Eje X: fechas
+        - Eje Y: EUR
+        - Dos líneas: ingresos brutos + reembolsos
+        - GET /api/admin/dashboard/charts?metric=revenue&from=&to=
+
+      Chart 4 — "Deportes más reservados" (PieChart o BarChart horizontal):
+        - Cada deporte con su % del total de bookings
+        - Colores por deporte
+        - GET /api/admin/dashboard/charts?metric=sports_popularity&from=&to=
+
+      Todos los charts con skeleton loading y empty state.
+
+  - step: 4
+    action: "Crear página de gestión de deportes en app/(dashboard)/admin/sports/page.tsx"
+    detail: |
+      Título: "Gestión de Deportes"
+      Botón "Nuevo Deporte" → abre modal/drawer de creación
+
+      Tabla de deportes:
+        Columnas: Nombre, Nivel, Duración, Precio, Max Participantes, Umbrales, Activo, Acciones
+        - Nombre: con icono del deporte
+        - Umbrales: resumen mini (viento max, olas max) con link "Configurar"
+        - Activo: toggle switch
+        - Acciones: Editar (icono), Eliminar (icono, con confirmación)
+
+      Fetching: useQuery GET /api/admin/sports
+
+      Modal de creación/edición (SportFormModal):
+        Campos:
+          - name (Input)
+          - description (Textarea)
+          - level (Select: principiante, intermedio, avanzado)
+          - duration_minutes (Input number)
+          - price (Input number, EUR)
+          - max_participants (Input number)
+          - active (Switch)
+        POST /api/admin/sports o PATCH /api/admin/sports/{id}
+
+  - step: 5
+    action: "Crear configuración de umbrales meteorológicos en components/admin/ThresholdConfig.tsx"
+    detail: |
+      Accesible desde la tabla de deportes (botón "Configurar umbrales") o como sección del form.
+
+      Props: sportId: string, currentThresholds: WeatherThreshold
+
+      Layout — Panel de configuración visual:
+        Sección "Umbrales de Cancelación Automática":
+          - Slider "Viento máximo": 0-50 kt, step 1
+            - Label: "{value} kt"
+            - Colores del track: verde (0-15) → amarillo (15-25) → rojo (25-50)
+          - Slider "Oleaje máximo": 0-5 m, step 0.1
+            - Label: "{value} m"
+            - Colores: verde (0-1) → amarillo (1-2.5) → rojo (2.5-5)
+          - Slider "Temperatura mínima del agua": 5-25 °C, step 1
+            - Label: "{value} °C"
+            - Colores: rojo (5-12) → amarillo (12-16) → verde (16-25)
+          - Select "Acción": "Cancelar automáticamente" / "Solo advertir (Warning)"
+
+        Preview visual:
+          - Tabla con escenarios ejemplo:
+            - "Viento 10kt, Olas 0.5m, Agua 20°C" → WeatherSemaphore APPROVED
+            - "Viento {umbral-2}kt, Olas {umbral-0.2}m" → WeatherSemaphore WARNING
+            - "Viento {umbral+5}kt, Olas {umbral+1}m" → WeatherSemaphore CANCELLED
+          - Recalcular preview al mover sliders
+
+      Guardar: PATCH /api/admin/sports/{sportId}/thresholds
+      Toast: "Umbrales actualizados para {sportName}"
+
+  - step: 6
+    action: "Crear página de gestión de instructores en app/(dashboard)/admin/instructors/page.tsx"
+    detail: |
+      Título: "Gestión de Instructores"
+      Botón "Nuevo Instructor"
+
+      Tabla:
+        Columnas: Avatar, Nombre, Deportes, Certificaciones, Activo, Acciones
+        - Deportes: badges con nombres de deportes asignados
+        - Acciones: Editar, Ver horario, Desactivar
+
+      Modal de creación/edición (InstructorFormModal):
+        Campos:
+          - user_id o email (buscar usuario existente)
+          - bio (Textarea)
+          - certifications (Input tags)
+          - sports (multi-select de deportes de la escuela)
+          - active (Switch)
+
+      Vista de horario (InstructorScheduleView):
+        - Al click "Ver horario": drawer con grid semanal del instructor
+        - Mostrar clases asignadas y slots de disponibilidad
+        - Read-only desde admin (instructor gestiona su propia disponibilidad)
+
+  - step: 7
+    action: "Crear página de gestión de spots en app/(dashboard)/admin/spots/page.tsx"
+    detail: |
+      Título: "Ubicaciones (Spots)"
+      Botón "Nuevo Spot"
+
+      Dos vistas (toggle):
+        Vista lista:
+          Tabla con columnas: Nombre, Coordenadas, Weather Status (en vivo), Activo, Acciones
+
+        Vista mapa:
+          - SpotMap con todos los spots de la escuela
+          - Markers coloreados por weather status actual
+          - Click en marker: popup con info + botón "Editar"
+
+      Modal de creación/edición (SpotFormModal):
+        Campos:
+          - name (Input)
+          - description (Textarea)
+          - lat, lng (Inputs number o click en mapa para seleccionar)
+          - Mapa interactivo para seleccionar ubicación (click → set lat/lng)
+          - weather_station_ref (Input, opcional)
+          - active (Switch)
+
+      Fetching: useQuery GET /api/admin/spots
+
+  - step: 8
+    action: "Crear visor de decisiones meteorológicas en app/(dashboard)/admin/weather-decisions/page.tsx"
+    detail: |
+      Título: "Log de Decisiones Meteorológicas"
+
+      Filtros:
+        - DateRangePicker
+        - Select deporte
+        - Select decisión: Todas / Aprobadas / Warning / Canceladas
+
+      Tabla de decisiones:
+        Columnas:
+          - Fecha/Hora (decided_at)
+          - Deporte
+          - Spot
+          - Decisión: WeatherSemaphore (APPROVED/WARNING/CANCELLED)
+          - Razón (texto descriptivo)
+          - Condiciones: viento, olas, temp (en el momento de la decisión)
+          - Booking afectado (link a booking si aplica)
+
+      Cada fila expandible para ver detalle:
+        - Datos meteorológicos completos del momento
+        - Umbrales configurados para ese deporte
+        - Comparación visual: valor real vs umbral (barra con marcador)
+
+      Paginación server-side.
+      Fetching: useQuery GET /api/admin/weather-decisions?from=&to=&sport=&decision=&page=&limit=
+
+      Export: botón "Exportar CSV" para descargar datos filtrados.
+
+  - step: 9
+    action: "Crear hooks de admin en hooks/useAdmin.ts"
+    detail: |
+      export function useAdminKPIs(from: string, to: string) {
+        return useQuery({
+          queryKey: ['admin-kpis', from, to],
+          queryFn: () => apiClient.get('/admin/dashboard/kpis', { params: { from, to } }),
+        });
+      }
+
+      export function useAdminChart(metric: string, from: string, to: string) {
+        return useQuery({
+          queryKey: ['admin-chart', metric, from, to],
+          queryFn: () => apiClient.get('/admin/dashboard/charts', { params: { metric, from, to } }),
+        });
+      }
+
+      // CRUD hooks for sports, instructors, spots
+      export function useAdminSports() { ... }
+      export function useCreateSport() { return useMutation(...) }
+      export function useUpdateSport() { return useMutation(...) }
+      export function useDeleteSport() { return useMutation(...) }
+      export function useUpdateThresholds() { return useMutation(...) }
+
+      export function useAdminInstructors() { ... }
+      export function useCreateInstructor() { return useMutation(...) }
+      export function useUpdateInstructor() { return useMutation(...) }
+
+      export function useAdminSpots() { ... }
+      export function useCreateSpot() { return useMutation(...) }
+      export function useUpdateSpot() { return useMutation(...) }
+
+      export function useWeatherDecisions(filters) { ... }
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Solo accesible por usuarios con role='admin' — AuthGuard obligatorio"
+  - "Los sliders de umbrales deben tener preview visual en tiempo real"
+  - "Eliminar un deporte con bookings activos no está permitido — mostrar error"
+  - "Eliminar un spot con clases programadas no está permitido — mostrar error"
+  - "Las gráficas deben ser responsive y legibles en tablet (min 768px)"
+  - "El visor de decisiones meteorológicas es read-only — no se pueden modificar decisiones pasadas"
+  - "Exportar CSV solo incluye datos del rango filtrado"
+  - "CRUD operations deben invalidar queries relacionadas tras mutación exitosa"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El dashboard muestra 4 KPI cards con datos reales y tendencia"
+  - "Las gráficas de ocupación, cancelaciones, ingresos y deportes renderizan correctamente"
+  - "El CRUD de deportes permite crear, editar y desactivar deportes"
+  - "Los sliders de umbrales meteorológicos actualizan preview visual en tiempo real"
+  - "Guardar umbrales actualiza la configuración en el backend"
+  - "El CRUD de instructores permite crear, editar y ver horario"
+  - "El CRUD de spots permite crear con click en mapa y muestra weather status en vivo"
+  - "El visor de decisiones muestra log filtrable con detalle expandible"
+  - "El botón exportar CSV descarga los datos filtrados"
+  - "Solo usuarios con rol admin pueden acceder al panel"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F2: Design System — Sidebar, WeatherSemaphore, SpotMap, StatusBadge"
+    - "F3: Auth — AuthGuard con role='admin'"
+    - "B5: Gestión de Escuelas y Spots — CRUD endpoints de spots y schools"
+    - "B6: Catálogo de Deportes — CRUD endpoints y configuración de umbrales"
+    - "B14: Reportes y Métricas — endpoints de KPIs, charts, weather decisions"
+  integrates_with:
+    - "B7: Gestión de Instructores — CRUD endpoints de instructores"
+    - "B9: Motor de Decisión Climática — weather decisions log"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Dashboard admin en /admin/dashboard con KPIs y gráficas
+    - Página /admin/sports con CRUD y configuración de umbrales con sliders visuales
+    - Página /admin/instructors con CRUD y vista de horario
+    - Página /admin/spots con CRUD, vista mapa y weather status en vivo
+    - Página /admin/weather-decisions con visor filtrable y exportación CSV
+    - ThresholdConfig component con sliders y preview visual
+    - Hooks: useAdminKPIs, useAdminChart, CRUD hooks para sports/instructors/spots
+
+verification: "cd frontend && npm run build && npm run lint"

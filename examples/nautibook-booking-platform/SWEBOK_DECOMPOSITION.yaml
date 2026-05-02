@@ -1,0 +1,436 @@
+# ============================================================
+# NautiBook — Descomposición SWEBOK v4.0
+# Aplicación de Reserva de Deportes Náuticos
+# con Integración Meteorológica Marina
+# ============================================================
+
+project:
+  name: "NautiBook"
+  type: "SaaS Web Application (Multi-Layer)"
+  layers:
+    - name: "Backend API"
+      type: "REST API"
+    - name: "Frontend"
+      type: "Web/Mobile App"
+
+# ============================================================
+# ACTORES
+# ============================================================
+actors:
+  - name: "Usuario (Cliente)"
+    operations:
+      - "registrarse e iniciar sesión"
+      - "buscar clases disponibles por deporte/fecha/ubicación"
+      - "ver condiciones meteorológicas actuales y previsión"
+      - "reservar clase"
+      - "cancelar/modificar reserva"
+      - "recibir notificaciones (confirmación, cancelación por clima)"
+      - "ver historial de reservas"
+      - "pagar reserva / solicitar reembolso"
+      - "comprar bonos/packs de clases"
+
+  - name: "Instructor"
+    operations:
+      - "ver agenda del día con semáforo meteorológico"
+      - "gestionar su disponibilidad horaria"
+      - "confirmar/rechazar reservas"
+      - "ver historial de clases impartidas"
+      - "recibir notificaciones de cancelación por clima"
+
+  - name: "Admin Escuela"
+    operations:
+      - "gestionar catálogo de deportes y niveles"
+      - "configurar umbrales meteorológicos por deporte"
+      - "gestionar instructores y horarios"
+      - "ver reportes de ocupación y cancelaciones"
+      - "configurar políticas de cancelación y reembolso"
+      - "gestionar ubicaciones/spots"
+
+  - name: "Sistema (Automático)"
+    operations:
+      - "consultar API meteorológica periódicamente"
+      - "evaluar condiciones vs umbrales"
+      - "cancelar clases automáticamente por mal tiempo"
+      - "enviar notificaciones automáticas"
+      - "procesar reembolsos automáticos"
+
+# ============================================================
+# ENTIDADES
+# ============================================================
+entities:
+  - name: "User"
+    fields: ["id", "email", "password_hash", "name", "phone", "role (cliente|instructor|admin)", "avatar_url", "created_at"]
+
+  - name: "School"
+    fields: ["id", "name", "description", "location_lat", "location_lng", "address", "timezone", "contact_email", "contact_phone", "created_at"]
+
+  - name: "Sport"
+    fields: ["id", "school_id", "name (vela|surf|kayak|paddle_surf|...)", "description", "level (principiante|intermedio|avanzado)", "max_participants", "duration_minutes", "price", "active"]
+
+  - name: "WeatherThreshold"
+    fields: ["id", "sport_id", "max_wind_speed_kt", "max_wave_height_m", "min_water_temp_c", "max_wave_period_s", "conditions_json", "action (cancel|warn)"]
+
+  - name: "Instructor"
+    fields: ["id", "user_id", "school_id", "sports[]", "bio", "certifications", "active"]
+
+  - name: "Schedule"
+    fields: ["id", "instructor_id", "sport_id", "day_of_week", "start_time", "end_time", "recurring", "valid_from", "valid_until"]
+
+  - name: "Booking"
+    fields: ["id", "user_id", "schedule_id", "sport_id", "instructor_id", "date", "start_time", "end_time", "status (confirmed|cancelled_weather|cancelled_user|completed|waitlist)", "participants", "created_at"]
+
+  - name: "WeatherData"
+    fields: ["id", "school_id", "timestamp", "wind_speed_kt", "wind_direction", "wave_height_m", "wave_period_s", "water_temp_c", "air_temp_c", "weather_source (open_meteo|stormglass)", "forecast_date", "fetched_at"]
+
+  - name: "WeatherDecisionLog"
+    fields: ["id", "booking_id", "sport_id", "weather_data_id", "decision (approved|warning|cancelled)", "reason", "decided_at"]
+
+  - name: "Payment"
+    fields: ["id", "booking_id", "user_id", "amount", "currency", "status (pending|paid|refunded|failed)", "payment_method", "provider_ref", "refund_reason", "created_at"]
+
+  - name: "CreditPack"
+    fields: ["id", "user_id", "school_id", "total_credits", "used_credits", "sport_id", "expires_at", "created_at"]
+
+  - name: "Notification"
+    fields: ["id", "user_id", "type (booking_confirmed|weather_cancel|reminder|refund)", "channel (push|email|sms)", "title", "body", "read", "sent_at"]
+
+  - name: "Spot"
+    fields: ["id", "school_id", "name", "lat", "lng", "description", "weather_station_ref"]
+
+# ============================================================
+# LAYER 1: BACKEND API — NODOS
+# ============================================================
+backend_nodes:
+
+  # --- OPERATIONS ---
+  - id: "B1"
+    title: "Backend Bootstrap y Configuración del Entorno"
+    category: "OPERATIONS"
+    purpose: >
+      Inicializar proyecto backend (Node.js/NestJS o Python/FastAPI),
+      configurar PostgreSQL, Redis, estructura de carpetas, linter,
+      Docker Compose para desarrollo local, variables de entorno.
+    depends_on: []
+
+  # --- DESIGN ---
+  - id: "B2"
+    title: "Modelos de Datos y Migraciones"
+    category: "DESIGN"
+    purpose: >
+      Definir esquema de base de datos para todas las entidades
+      (User, School, Sport, WeatherThreshold, Instructor, Schedule,
+      Booking, WeatherData, WeatherDecisionLog, Payment, CreditPack,
+      Notification, Spot). Crear migraciones y seeds iniciales.
+    depends_on: ["B1"]
+
+  - id: "B3"
+    title: "Contrato API (OpenAPI/Swagger)"
+    category: "DESIGN"
+    purpose: >
+      Definir todos los endpoints REST con sus request/response schemas,
+      códigos de error, y documentación OpenAPI. Contrato compartido
+      con frontend.
+    depends_on: ["B2"]
+
+  # --- SECURITY ---
+  - id: "B4"
+    title: "Autenticación y Autorización por Roles"
+    category: "SECURITY"
+    purpose: >
+      Implementar registro, login (email+password), OAuth2 (Google/Apple),
+      JWT con refresh tokens. Middleware de autorización por roles
+      (cliente, instructor, admin). Protección RGPD de datos personales.
+    depends_on: ["B2"]
+
+  # --- CONSTRUCTION ---
+  - id: "B5"
+    title: "Gestión de Escuelas y Spots"
+    category: "CONSTRUCTION"
+    purpose: >
+      CRUD de escuelas y spots/ubicaciones. Asignación de coordenadas
+      geográficas para consulta meteorológica. Configuración por escuela.
+    depends_on: ["B2", "B4"]
+
+  - id: "B6"
+    title: "Catálogo de Deportes y Umbrales Meteorológicos"
+    category: "CONSTRUCTION"
+    purpose: >
+      CRUD de deportes por escuela con niveles y precios.
+      Configuración de umbrales meteorológicos por deporte
+      (viento máx, oleaje máx, temp mín agua, etc.) y acción
+      asociada (cancelar automáticamente o advertir).
+    depends_on: ["B2", "B4", "B5"]
+
+  - id: "B7"
+    title: "Gestión de Instructores y Horarios"
+    category: "CONSTRUCTION"
+    purpose: >
+      CRUD instructores vinculados a escuela y deportes.
+      Gestión de disponibilidad horaria (Schedule): franjas
+      semanales recurrentes, excepciones, vacaciones.
+    depends_on: ["B2", "B4", "B5"]
+
+  - id: "B8"
+    title: "Motor de Integración Meteorológica"
+    category: "CONSTRUCTION"
+    purpose: >
+      Job scheduler (cron cada 1h) que consulta Open-Meteo Marine API
+      por cada spot activo. Almacena datos en WeatherData.
+      Fallback a StormGlass si Open-Meteo falla (circuit breaker).
+      Cache en Redis (TTL 1h). Datos: viento, oleaje, periodo ola,
+      temperatura agua, previsión 7 días.
+    depends_on: ["B1", "B2", "B5"]
+
+  - id: "B9"
+    title: "Motor de Decisión Climática"
+    category: "CONSTRUCTION"
+    purpose: >
+      Servicio que evalúa WeatherData vs WeatherThreshold por deporte.
+      Clasifica cada franja horaria como: APTO (verde), PRECAUCIÓN
+      (amarillo), CANCELADO (rojo). Genera WeatherDecisionLog.
+      Trigger de cancelación automática X horas antes de la clase
+      si condiciones son CANCELADO.
+    depends_on: ["B6", "B8"]
+
+  - id: "B10"
+    title: "Sistema de Reservas y Disponibilidad"
+    category: "CONSTRUCTION"
+    purpose: >
+      Endpoint de búsqueda de clases disponibles filtrado por deporte,
+      fecha, ubicación y condiciones meteorológicas (semáforo).
+      CRUD de reservas con validación de disponibilidad (instructor +
+      franja + aforo + clima). Lista de espera cuando aforo completo.
+      Cancelación y modificación por usuario.
+    depends_on: ["B4", "B7", "B9"]
+
+  - id: "B11"
+    title: "Cancelación Automática y Reprogramación"
+    category: "CONSTRUCTION"
+    purpose: >
+      Proceso automático que cancela reservas cuando el motor de
+      decisión climática marca CANCELADO. Sugiere fechas alternativas
+      basándose en previsión a 7 días. Actualiza estado de reservas
+      y dispara flujo de reembolso y notificación.
+    depends_on: ["B9", "B10", "B12", "B13"]
+
+  - id: "B12"
+    title: "Pagos, Reembolsos y Bonos/Packs"
+    category: "CONSTRUCTION"
+    purpose: >
+      Integración con Stripe (o Redsys). Cobro al confirmar reserva.
+      Reembolso automático por cancelación climática. Gestión de
+      CreditPacks: compra de bonos, descuento de créditos al reservar,
+      expiración de packs.
+    depends_on: ["B4", "B10"]
+
+  - id: "B13"
+    title: "Sistema de Notificaciones"
+    category: "CONSTRUCTION"
+    purpose: >
+      Envío de notificaciones multicanal (push/email/SMS):
+      confirmación de reserva, recordatorio pre-clase (24h/2h),
+      cancelación por clima, reembolso procesado.
+      Integración con servicio de email (SendGrid/SES),
+      SMS (Twilio), push (FCM/APNs).
+    depends_on: ["B2", "B4"]
+
+  - id: "B14"
+    title: "Panel Admin: Reportes y Métricas"
+    category: "CONSTRUCTION"
+    purpose: >
+      Endpoints para dashboard admin: tasa de ocupación por deporte,
+      ratio de cancelaciones por clima, ingresos y reembolsos,
+      deportes más reservados, fiabilidad meteorológica histórica.
+    depends_on: ["B4", "B10", "B9"]
+
+  # --- TESTING ---
+  - id: "B15"
+    title: "Tests de Integración del Backend"
+    category: "TESTING"
+    purpose: >
+      Tests e2e de los flujos críticos: reserva completa, cancelación
+      por clima, reembolso automático, fallback de API meteo.
+      Tests unitarios del motor de decisión climática con datos
+      meteorológicos simulados.
+    depends_on: ["B9", "B10", "B11", "B12"]
+
+  # --- OPERATIONS ---
+  - id: "B16"
+    title: "CI/CD, Monitorización y Despliegue"
+    category: "OPERATIONS"
+    purpose: >
+      Pipeline CI/CD (GitHub Actions). Despliegue en cloud (Railway/
+      Fly.io/AWS). Monitoring: health checks, alertas si API meteo
+      no responde, logs de decisiones meteorológicas, métricas de
+      latencia y errores.
+    depends_on: ["B15"]
+
+# ============================================================
+# LAYER 2: FRONTEND — NODOS
+# ============================================================
+frontend_nodes:
+
+  # --- OPERATIONS ---
+  - id: "F1"
+    title: "Frontend Bootstrap y Configuración"
+    category: "OPERATIONS"
+    purpose: >
+      Inicializar proyecto frontend (Next.js/React o React Native
+      para móvil). Configurar routing, design system, API client
+      (axios/fetch), estado global (Zustand/Redux).
+    depends_on: ["backend:B3"]
+
+  # --- DESIGN ---
+  - id: "F2"
+    title: "Design System y Componentes Base"
+    category: "DESIGN"
+    purpose: >
+      Componentes UI reutilizables: cards, botones, modales,
+      semáforo meteorológico (verde/amarillo/rojo), calendario
+      de disponibilidad, selector de deporte, iconografía náutica.
+    depends_on: ["F1"]
+
+  # --- CONSTRUCTION ---
+  - id: "F3"
+    title: "Registro, Login y Perfil de Usuario"
+    category: "CONSTRUCTION"
+    purpose: >
+      Pantallas de registro, login (email + OAuth Google/Apple),
+      recuperación de contraseña, perfil de usuario con historial
+      de reservas.
+    depends_on: ["F2", "backend:B4"]
+
+  - id: "F4"
+    title: "Buscador de Clases y Dashboard Meteorológico"
+    category: "CONSTRUCTION"
+    purpose: >
+      Pantalla principal con mapa de spots, filtros (deporte, fecha,
+      nivel), listado de clases disponibles con semáforo meteorológico
+      integrado (verde=apto, amarillo=precaución, rojo=cancelado).
+      Vista de previsión a 7 días por spot. Widget de condiciones
+      actuales (viento, oleaje, temperatura agua).
+    depends_on: ["F2", "backend:B8", "backend:B9", "backend:B10"]
+
+  - id: "F5"
+    title: "Flujo de Reserva y Pago"
+    category: "CONSTRUCTION"
+    purpose: >
+      Flujo paso a paso: seleccionar clase → ver detalle (instructor,
+      condiciones, precio) → confirmar → pagar (Stripe Elements) →
+      confirmación. Opción de usar créditos de bono/pack.
+      Manejo de lista de espera.
+    depends_on: ["F2", "F3", "backend:B10", "backend:B12"]
+
+  - id: "F6"
+    title: "Gestión de Reservas del Usuario"
+    category: "CONSTRUCTION"
+    purpose: >
+      Vista de reservas activas con estado y condiciones meteo.
+      Cancelar/modificar reserva. Historial de reservas pasadas.
+      Detalle de reembolsos. Gestión de bonos/packs comprados.
+    depends_on: ["F3", "backend:B10", "backend:B12"]
+
+  - id: "F7"
+    title: "Centro de Notificaciones"
+    category: "CONSTRUCTION"
+    purpose: >
+      Bandeja de notificaciones in-app. Registro de push notifications
+      (FCM/APNs). Configuración de preferencias de notificación
+      (push/email/SMS).
+    depends_on: ["F3", "backend:B13"]
+
+  - id: "F8"
+    title: "Panel del Instructor"
+    category: "CONSTRUCTION"
+    purpose: >
+      Agenda diaria/semanal con semáforo meteorológico por clase.
+      Gestión de disponibilidad. Vista de alumnos por clase.
+      Historial de clases impartidas.
+    depends_on: ["F2", "F3", "backend:B7", "backend:B9"]
+
+  - id: "F9"
+    title: "Panel de Administración de Escuela"
+    category: "CONSTRUCTION"
+    purpose: >
+      Dashboard con métricas (ocupación, cancelaciones, ingresos).
+      Gestión de catálogo de deportes y umbrales meteorológicos.
+      Gestión de instructores y horarios. Configuración de políticas
+      de cancelación. Vista de decisiones meteorológicas históricas.
+    depends_on: ["F2", "F3", "backend:B5", "backend:B6", "backend:B14"]
+
+  # --- TESTING ---
+  - id: "F10"
+    title: "Tests E2E del Frontend"
+    category: "TESTING"
+    purpose: >
+      Tests con Playwright/Cypress de los flujos principales:
+      buscar clase → reservar → pagar, recibir cancelación por
+      clima, panel admin configurando umbrales. Tests de componentes
+      del semáforo meteorológico.
+    depends_on: ["F4", "F5", "F6", "F9"]
+
+# ============================================================
+# VALIDACIÓN
+# ============================================================
+validation:
+  backend:
+    total_nodes: 16
+    construction_count: 10
+    construction_ratio: "10/16 (62.5%)"
+    expected_operations:
+      - "Usuario → Clases → buscar"
+      - "Usuario → Reserva → crear/cancelar/modificar"
+      - "Usuario → Pagos → pagar/reembolsar"
+      - "Usuario → Bonos → comprar/usar"
+      - "Usuario → Notificaciones → recibir"
+      - "Instructor → Agenda → ver"
+      - "Instructor → Disponibilidad → gestionar"
+      - "Admin → Deportes → CRUD"
+      - "Admin → Umbrales → configurar"
+      - "Admin → Instructores → gestionar"
+      - "Admin → Reportes → ver"
+      - "Sistema → Meteo → consultar/evaluar"
+      - "Sistema → Cancelación → ejecutar automáticamente"
+      - "Sistema → Reembolso → procesar automáticamente"
+    coverage: "14/14 operations covered"
+
+  frontend:
+    total_nodes: 10
+    construction_count: 7
+    construction_ratio: "7/10 (70%)"
+    expected_operations:
+      - "Usuario → Login/Registro → pantalla"
+      - "Usuario → Búsqueda+Meteo → dashboard"
+      - "Usuario → Reserva+Pago → flujo"
+      - "Usuario → Mis Reservas → gestión"
+      - "Usuario → Notificaciones → centro"
+      - "Instructor → Panel → agenda+disponibilidad"
+      - "Admin → Panel → dashboard+config"
+    coverage: "7/7 operations covered"
+
+# ============================================================
+# GRAFO DE DEPENDENCIAS (resumen visual)
+# ============================================================
+# Backend:
+#   B1 → B2 → B3
+#              B4 (security)
+#              B5 (escuelas) → B6 (deportes+umbrales) → B9 (decisión)
+#                             B7 (instructores)        ↑
+#              B8 (meteo API) ────────────────────────→ B9
+#              B9 + B10 + B12 + B13 → B11 (cancelación auto)
+#              B10 (reservas) ← B4, B7, B9
+#              B12 (pagos) ← B4, B10
+#              B13 (notificaciones) ← B2, B4
+#              B14 (reportes) ← B4, B10, B9
+#              B15 (testing) ← B9, B10, B11, B12
+#              B16 (CI/CD) ← B15
+#
+# Frontend:
+#   F1 → F2 → F3 (auth)
+#              F4 (búsqueda+meteo) ← backend:B8,B9,B10
+#              F5 (reserva+pago) ← backend:B10,B12
+#              F6 (mis reservas)
+#              F7 (notificaciones) ← backend:B13
+#              F8 (panel instructor) ← backend:B7,B9
+#              F9 (panel admin) ← backend:B5,B6,B14
+#              F10 (testing) ← F4,F5,F6,F9

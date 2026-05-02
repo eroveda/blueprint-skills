@@ -1,0 +1,300 @@
+# ============================================================
+# SPEC B5 — Gestión de Escuelas y Spots
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Gestión de Escuelas y Spots"
+purpose: "Implementar CRUD completo de escuelas y spots/ubicaciones con coordenadas geográficas para consulta meteorológica, control de acceso por roles y endpoints REST"
+category: "CONSTRUCTION"
+
+input_context: |
+  Proyecto inicializado con framework backend (Node.js/NestJS recomendado).
+  Base de datos PostgreSQL configurada con las siguientes tablas ya creadas:
+    - schools (id, name, description, location_lat, location_lng, address, timezone, contact_email, contact_phone, created_at)
+    - spots (id, school_id, name, lat, lng, description, weather_station_ref, active, created_at)
+  Módulo de autenticación (B4) implementado — JWT guard y decorador @Roles() disponibles.
+  Módulo de modelos (B2) implementado — entidades y migraciones creadas.
+  Variables de entorno disponibles:
+    - DATABASE_URL
+    - JWT_SECRET
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo src/modules/schools/schools.module.ts"
+    detail: |
+      Registrar SchoolService, SchoolController, SpotService, SpotController.
+      Importar AuthModule (para guards), TypeORM/Prisma para repositorios.
+      Exportar SchoolService y SpotService para consumo por otros módulos.
+
+  - step: 2
+    action: "Crear DTOs en src/modules/schools/dto/"
+    detail: |
+      CreateSchoolDTO:
+        name: string (required, min 2, max 100)
+        description: string (optional, max 500)
+        location_lat: number (required, -90 a 90)
+        location_lng: number (required, -180 a 180)
+        address: string (required, max 255)
+        timezone: string (required, formato IANA ej: "Europe/Madrid")
+        contact_email: string (required, formato email)
+        contact_phone: string (optional, formato teléfono)
+
+      UpdateSchoolDTO: Partial<CreateSchoolDTO> (todos los campos opcionales)
+
+      CreateSpotDTO:
+        name: string (required, min 2, max 100)
+        lat: number (required, -90 a 90)
+        lng: number (required, -180 a 180)
+        description: string (optional, max 500)
+        weather_station_ref: string (optional, max 100)
+        active: boolean (default true)
+
+      UpdateSpotDTO: Partial<CreateSpotDTO>
+
+      Usar class-validator para decoradores de validación.
+
+  - step: 3
+    action: "Implementar SchoolService en src/modules/schools/school.service.ts"
+    detail: |
+      Inyectar: SchoolRepository.
+
+      Métodos:
+
+      async create(dto: CreateSchoolDTO): Promise<School>
+        → Crear escuela, retornar entidad creada
+
+      async findAll(): Promise<School[]>
+        → Retornar todas las escuelas ordenadas por name ASC
+
+      async findById(id: string): Promise<School>
+        → Buscar por id, lanzar NotFoundException si no existe
+
+      async update(id: string, dto: UpdateSchoolDTO): Promise<School>
+        → Verificar existencia, actualizar campos, retornar entidad actualizada
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia, verificar que no tiene spots activos vinculados
+        → Si tiene spots activos, lanzar ConflictException
+        → Eliminar (soft delete si se implementa, sino hard delete)
+
+  - step: 4
+    action: "Implementar SpotService en src/modules/schools/spot.service.ts"
+    detail: |
+      Inyectar: SpotRepository, SchoolService.
+
+      Métodos:
+
+      async create(schoolId: string, dto: CreateSpotDTO): Promise<Spot>
+        → Verificar que la escuela existe via SchoolService.findById()
+        → Crear spot vinculado a la escuela
+
+      async findBySchool(schoolId: string): Promise<Spot[]>
+        → Verificar que la escuela existe
+        → Retornar todos los spots de la escuela
+
+      async findById(id: string): Promise<Spot>
+        → Buscar por id, lanzar NotFoundException si no existe
+
+      async findAllActive(): Promise<Spot[]>
+        → Retornar todos los spots con active=true de todas las escuelas
+        → Usado por B8 (WeatherScheduler) para consultar meteorología
+
+      async update(id: string, dto: UpdateSpotDTO): Promise<Spot>
+        → Verificar existencia, actualizar campos
+
+      async delete(id: string): Promise<void>
+        → Verificar existencia, eliminar spot
+
+  - step: 5
+    action: "Implementar SchoolController en src/modules/schools/school.controller.ts"
+    detail: |
+      @Controller('api/v1/schools')
+
+      @Get()
+      async findAll()
+        → Requiere autenticación (JWT guard)
+        → Llamar SchoolService.findAll()
+        → Retornar 200 con array de escuelas
+
+      @Get(':id')
+      async findById(@Param('id') id: string)
+        → Requiere autenticación
+        → Llamar SchoolService.findById(id)
+        → Retornar 200 con escuela, o 404 si no existe
+
+      @Post()
+      async create(@Body() dto: CreateSchoolDTO)
+        → Requiere autenticación + rol admin (@Roles('admin'))
+        → Validar DTO
+        → Llamar SchoolService.create(dto)
+        → Retornar 201 con escuela creada
+
+      @Patch(':id')
+      async update(@Param('id') id: string, @Body() dto: UpdateSchoolDTO)
+        → Requiere autenticación + rol admin
+        → Llamar SchoolService.update(id, dto)
+        → Retornar 200 con escuela actualizada
+
+      @Delete(':id')
+      async delete(@Param('id') id: string)
+        → Requiere autenticación + rol admin
+        → Llamar SchoolService.delete(id)
+        → Retornar 204 sin contenido
+
+  - step: 6
+    action: "Implementar SpotController en src/modules/schools/spot.controller.ts"
+    detail: |
+      @Controller('api/v1/schools/:schoolId/spots')
+
+      @Get()
+      async findBySchool(@Param('schoolId') schoolId: string)
+        → Requiere autenticación
+        → Llamar SpotService.findBySchool(schoolId)
+        → Retornar 200 con array de spots
+
+      @Get(':spotId')
+      async findById(@Param('spotId') spotId: string)
+        → Requiere autenticación
+        → Llamar SpotService.findById(spotId)
+        → Retornar 200 con spot, o 404 si no existe
+
+      @Post()
+      async create(@Param('schoolId') schoolId: string, @Body() dto: CreateSpotDTO)
+        → Requiere autenticación + rol admin
+        → Llamar SpotService.create(schoolId, dto)
+        → Retornar 201 con spot creado
+
+      @Patch(':spotId')
+      async update(@Param('spotId') spotId: string, @Body() dto: UpdateSpotDTO)
+        → Requiere autenticación + rol admin
+        → Llamar SpotService.update(spotId, dto)
+        → Retornar 200 con spot actualizado
+
+      @Delete(':spotId')
+      async delete(@Param('spotId') spotId: string)
+        → Requiere autenticación + rol admin
+        → Llamar SpotService.delete(spotId)
+        → Retornar 204 sin contenido
+
+  - step: 7
+    action: "Escribir tests unitarios en src/modules/schools/__tests__/school.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create a school with valid data"
+        - "should return all schools ordered by name"
+        - "should return a school by id"
+        - "should throw NotFoundException for non-existent school"
+        - "should update a school"
+        - "should throw ConflictException when deleting school with active spots"
+        - "should delete a school without active spots"
+
+      Mockear: SchoolRepository.
+
+  - step: 8
+    action: "Escribir tests unitarios en src/modules/schools/__tests__/spot.service.spec.ts"
+    detail: |
+      Tests:
+        - "should create a spot linked to an existing school"
+        - "should throw NotFoundException for non-existent school when creating spot"
+        - "should return all spots for a school"
+        - "should return a spot by id"
+        - "should throw NotFoundException for non-existent spot"
+        - "should return all active spots across all schools"
+        - "should update a spot"
+        - "should delete a spot"
+
+      Mockear: SpotRepository, SchoolService.
+
+  - step: 9
+    action: "Escribir tests de integración en src/modules/schools/__tests__/schools.integration.spec.ts"
+    detail: |
+      Tests con base de datos de test (o repositorio in-memory):
+        - "POST /api/v1/schools → 201 con datos válidos y rol admin"
+        - "POST /api/v1/schools → 403 con rol cliente"
+        - "GET /api/v1/schools → 200 con lista de escuelas (usuario autenticado)"
+        - "GET /api/v1/schools → 401 sin token"
+        - "GET /api/v1/schools/:id → 200 con escuela existente"
+        - "GET /api/v1/schools/:id → 404 con id inexistente"
+        - "PATCH /api/v1/schools/:id → 200 con rol admin"
+        - "DELETE /api/v1/schools/:id → 204 con rol admin"
+        - "DELETE /api/v1/schools/:id → 409 si tiene spots activos"
+        - "POST /api/v1/schools/:id/spots → 201 con datos válidos y rol admin"
+        - "GET /api/v1/schools/:id/spots → 200 con lista de spots"
+        - "PATCH /api/v1/schools/:id/spots/:spotId → 200 con rol admin"
+        - "DELETE /api/v1/schools/:id/spots/:spotId → 204 con rol admin"
+
+  - step: 10
+    action: "Actualizar documentación"
+    detail: |
+      Añadir a ARCHITECTURE.md:
+        - Sección "Schools & Spots Module" con descripción de entidades y relaciones
+        - Diagrama de relación School → Spot (1:N)
+      Añadir a FUNCTIONAL_FLOWS.md:
+        - "Admin crea escuela" (actor: Admin)
+        - "Admin gestiona spots de una escuela" (actor: Admin)
+        - "Usuario lista escuelas y spots" (actor: Usuario)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Solo usuarios con rol admin pueden crear, editar o eliminar escuelas y spots"
+  - "Cualquier usuario autenticado puede listar y ver escuelas y spots"
+  - "No se puede eliminar una escuela que tenga spots activos — retornar 409 Conflict"
+  - "Coordenadas (lat, lng) son obligatorias — se usan para consulta meteorológica en B8"
+  - "Timezone debe ser formato IANA válido (ej: Europe/Madrid, America/New_York)"
+  - "Validación de email en contact_email con formato estándar"
+  - "Los spots se crean siempre vinculados a una escuela (school_id obligatorio)"
+  - "SpotService.findAllActive() debe ser eficiente — usado por cron job cada hora en B8"
+  - "IDs en formato UUID v4"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "POST /api/v1/schools crea una escuela y retorna 201 (solo admin)"
+  - "POST /api/v1/schools retorna 403 para usuarios no admin"
+  - "GET /api/v1/schools retorna 200 con lista de escuelas (cualquier usuario autenticado)"
+  - "GET /api/v1/schools retorna 401 sin token de autenticación"
+  - "GET /api/v1/schools/:id retorna 200 con la escuela o 404 si no existe"
+  - "PATCH /api/v1/schools/:id actualiza la escuela y retorna 200 (solo admin)"
+  - "DELETE /api/v1/schools/:id retorna 204 (solo admin, sin spots activos)"
+  - "DELETE /api/v1/schools/:id retorna 409 si la escuela tiene spots activos"
+  - "POST /api/v1/schools/:id/spots crea un spot vinculado a la escuela (solo admin)"
+  - "GET /api/v1/schools/:id/spots retorna 200 con lista de spots de la escuela"
+  - "SpotService.findAllActive() retorna todos los spots activos de todas las escuelas"
+  - "Todos los tests unitarios y de integración pasan"
+  - "Validaciones de DTO rechazan datos inválidos con 400 Bad Request"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — framework, DB configurados"
+    - "B2: Modelos de Datos — tablas schools y spots creadas con migraciones"
+    - "B4: Autenticación y Autorización — JWT guard y decorador @Roles() disponibles"
+  integrates_with:
+    - "B6: Catálogo de Deportes — los deportes pertenecen a una escuela"
+    - "B7: Gestión de Instructores — los instructores pertenecen a una escuela"
+    - "B8: Motor Meteorológico — consume SpotService.findAllActive() para consultar APIs meteo"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - SchoolService.findAll() → lista de escuelas
+    - SchoolService.findById(id) → escuela por id
+    - SpotService.findBySchool(schoolId) → spots de una escuela
+    - SpotService.findById(id) → spot por id
+    - SpotService.findAllActive() → todos los spots activos (usado por B8)
+    - GET /api/v1/schools → endpoint REST para frontend
+    - GET /api/v1/schools/:id → endpoint REST para frontend
+    - GET /api/v1/schools/:id/spots → endpoint REST para frontend
+    - Tablas schools y spots en PostgreSQL con datos gestionados
+
+verification: "npm test -- --testPathPattern=schools"

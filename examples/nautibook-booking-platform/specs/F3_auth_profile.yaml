@@ -1,0 +1,276 @@
+# ============================================================
+# SPEC F3 — Registro, Login y Perfil de Usuario
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Registro, Login y Perfil de Usuario"
+purpose: "Implementar las páginas de autenticación (login, registro, recuperación de contraseña) y perfil de usuario con edición de datos personales e historial de reservas"
+category: "CONSTRUCTION"
+
+input_context: |
+  Proyecto frontend configurado con Next.js, Tailwind, shadcn/ui (F1).
+  Design System y componentes base implementados (F2).
+  API client con interceptor JWT configurado en lib/api/client.ts.
+  Store de autenticación Zustand configurado en stores/auth.store.ts.
+  Backend de autenticación (B4) operativo con endpoints:
+    - POST /api/auth/register
+    - POST /api/auth/login
+    - POST /api/auth/refresh
+    - POST /api/auth/logout
+    - POST /api/auth/forgot-password
+    - POST /api/auth/reset-password
+    - GET /api/auth/google (OAuth redirect)
+    - GET /api/auth/apple (OAuth redirect)
+    - GET /api/users/me
+    - PATCH /api/users/me
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear página de login en app/(auth)/login/page.tsx"
+    detail: |
+      Layout centrado con card de login:
+
+      Elementos:
+        - Logo NautiBook arriba
+        - Título "Iniciar Sesión"
+        - Form con campos:
+          - email (Input type=email, required, validación formato email)
+          - password (Input type=password, required, min 8 chars)
+        - Botón "Iniciar Sesión" (Button, full width, loading state)
+        - Link "¿Olvidaste tu contraseña?" → /forgot-password
+        - Separador "— o continuar con —"
+        - Botón OAuth Google (outline, icon Google)
+        - Botón OAuth Apple (outline, icon Apple)
+        - Texto inferior: "¿No tienes cuenta?" + Link "Regístrate" → /register
+
+      Lógica:
+        - onSubmit: llamar useAuthStore().login({ email, password })
+        - Mostrar toast de error si credenciales inválidas
+        - En éxito: redirect a query param 'redirect' o '/'
+        - Loading state en botón mientras espera respuesta
+        - Deshabilitar form durante submit
+
+      OAuth:
+        - Botón Google: redirigir a NEXT_PUBLIC_API_URL + /auth/google
+        - Botón Apple: redirigir a NEXT_PUBLIC_API_URL + /auth/apple
+        - Callback handling: leer tokens de query params al volver
+
+  - step: 2
+    action: "Crear página de registro en app/(auth)/register/page.tsx"
+    detail: |
+      Layout similar al login con card de registro:
+
+      Elementos:
+        - Logo NautiBook
+        - Título "Crear Cuenta"
+        - Form con campos:
+          - name (Input, required, min 2 chars)
+          - email (Input type=email, required)
+          - phone (Input type=tel, optional, formato español +34)
+          - password (Input type=password, required, min 8 chars)
+          - confirmPassword (Input type=password, must match password)
+        - Checkbox: "Acepto los términos y condiciones" (link a /terms)
+        - Botón "Registrarse" (full width, loading state)
+        - Separador OAuth (Google / Apple)
+        - Texto: "¿Ya tienes cuenta?" + Link "Inicia sesión" → /login
+
+      Validación client-side con React Hook Form o useState:
+        - Email formato válido
+        - Password min 8 chars, al menos 1 mayúscula y 1 número
+        - Passwords coinciden
+        - Términos aceptados
+
+      Lógica:
+        - onSubmit: llamar useAuthStore().register({ name, email, phone, password })
+        - En éxito: redirect a /login con toast "Cuenta creada correctamente"
+        - En error (email duplicado): mostrar error inline en el campo email
+
+  - step: 3
+    action: "Crear página de recuperación de contraseña en app/(auth)/forgot-password/page.tsx"
+    detail: |
+      Página con card simple:
+
+      Estado 1 — Solicitar reset:
+        - Título "Recuperar Contraseña"
+        - Texto: "Introduce tu email y te enviaremos un enlace para restablecer tu contraseña"
+        - Input email
+        - Botón "Enviar enlace"
+
+      Al submit:
+        - POST /api/auth/forgot-password { email }
+        - Siempre mostrar mensaje de éxito (no revelar si email existe o no)
+
+      Estado 2 — Confirmación:
+        - Icono check
+        - Texto: "Si el email existe, recibirás un enlace de recuperación"
+        - Link "Volver al login" → /login
+
+      Crear app/(auth)/reset-password/page.tsx:
+        - Leer token de query params (?token=xxx)
+        - Form: nueva contraseña + confirmar contraseña
+        - POST /api/auth/reset-password { token, password }
+        - En éxito: redirect a /login con toast "Contraseña actualizada"
+
+  - step: 4
+    action: "Crear hook useAuth en hooks/useAuth.ts"
+    detail: |
+      Custom hook que expone:
+        const { user, isAuthenticated, isLoading, login, logout, register } = useAuth();
+
+      Implementación:
+        - Wrapper del store Zustand useAuthStore
+        - Al montar: verificar si hay token en store y validar con GET /api/users/me
+          - Si token expirado: intentar refresh
+          - Si refresh falla: logout
+        - Exponer isLoading: true mientras verifica token inicial
+
+      Crear hook hooks/useRequireAuth.ts:
+        - Usa useAuth()
+        - Si !isAuthenticated && !isLoading → redirect a /login
+        - Retorna user (con tipo non-null garantizado)
+
+  - step: 5
+    action: "Crear página de perfil en app/(protected)/profile/page.tsx"
+    detail: |
+      Página con layout de dos columnas (mobile: stack):
+
+      Columna izquierda — Avatar y datos:
+        - Avatar grande (componente Avatar de shadcn)
+        - Botón "Cambiar foto" → input file con preview
+        - Nombre del usuario
+        - Email (no editable, solo display)
+        - Rol (badge)
+        - Miembro desde: fecha de created_at
+
+      Columna derecha — Form de edición:
+        - Título "Datos Personales"
+        - Campos editables:
+          - name (Input, pre-filled)
+          - phone (Input, pre-filled)
+        - Botón "Guardar cambios" (disabled si no hay cambios)
+        - Separador
+        - Sección "Cambiar Contraseña":
+          - currentPassword (Input)
+          - newPassword (Input)
+          - confirmNewPassword (Input)
+          - Botón "Actualizar Contraseña"
+
+      Lógica:
+        - Cargar datos: usar user del store o GET /api/users/me
+        - Guardar: PATCH /api/users/me { name, phone }
+        - Subir avatar: POST /api/users/me/avatar (multipart/form-data)
+        - Cambiar password: POST /api/auth/change-password { current, new }
+        - Toast de éxito/error en cada acción
+
+      Sección inferior — Links rápidos:
+        - Card "Mis Reservas" → /my-bookings
+        - Card "Mis Packs de Créditos" → /my-packs
+        - Card "Notificaciones" → /notifications
+
+  - step: 6
+    action: "Configurar OAuth callback handler en app/(auth)/auth/callback/page.tsx"
+    detail: |
+      Página que maneja el redirect de OAuth:
+
+      useEffect al montar:
+        1. Leer query params: access_token, refresh_token, error
+        2. Si error → redirect a /login con toast de error
+        3. Si tokens presentes:
+          a. Guardar tokens en auth store
+          b. GET /api/users/me para obtener datos del usuario
+          c. Guardar user en auth store
+          d. Redirect a / (o redirect URL guardada)
+
+      Mientras procesa: mostrar loading spinner con "Completando inicio de sesión..."
+
+  - step: 7
+    action: "Proteger rutas con middleware y layout guards"
+    detail: |
+      Crear components/auth/AuthGuard.tsx:
+        Props: children, requiredRole?: 'admin' | 'instructor'
+        Lógica:
+          - Usar useRequireAuth()
+          - Si requiredRole y user.role !== requiredRole → redirect a /
+          - Mientras isLoading → skeleton de página completa
+          - Cuando authenticated → render children
+
+      Aplicar AuthGuard en layouts:
+        - app/(protected)/layout.tsx: envolver con AuthGuard (cualquier rol)
+        - app/(dashboard)/instructor/layout.tsx: AuthGuard requiredRole='instructor'
+        - app/(dashboard)/admin/layout.tsx: AuthGuard requiredRole='admin'
+
+  - step: 8
+    action: "Implementar manejo de sesión expirada"
+    detail: |
+      En el interceptor de respuesta del API client (lib/api/client.ts):
+        - Si el refresh token falla (401):
+          1. Limpiar auth store
+          2. Mostrar toast: "Tu sesión ha expirado. Por favor, inicia sesión de nuevo."
+          3. Redirigir a /login?expired=true
+
+      En la página de login:
+        - Si query param expired=true:
+          - Mostrar alerta banner amarillo: "Tu sesión ha expirado"
+
+      Crear hook hooks/useSessionTimeout.ts:
+        - Escuchar eventos de actividad (click, keypress)
+        - Si no hay actividad en 30 minutos: mostrar modal "Sesión a punto de expirar"
+        - Botón "Continuar" → refresh token
+        - Si no responde en 60s → logout automático
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "No almacenar contraseñas en el frontend — solo enviar al backend para validación"
+  - "Tokens se guardan en localStorage vía Zustand persist — no en cookies del frontend"
+  - "OAuth redirect debe pasar por el backend — no autenticar directamente desde frontend"
+  - "No revelar si un email existe o no en el flujo de forgot-password"
+  - "Validación de formularios client-side es complementaria — el backend siempre valida también"
+  - "Subida de avatar: máximo 2MB, formatos JPG/PNG/WebP"
+  - "Todos los formularios deben tener estados de loading y error visibles"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "Login con email+password funciona y redirige al home"
+  - "Login con credenciales inválidas muestra error claro"
+  - "Registro crea cuenta y redirige al login con mensaje de éxito"
+  - "Registro con email duplicado muestra error inline"
+  - "Botones OAuth de Google y Apple redirigen correctamente al backend"
+  - "Forgot password envía email y muestra confirmación (sin revelar si email existe)"
+  - "Página de perfil carga datos del usuario y permite editar nombre y teléfono"
+  - "Cambio de avatar funciona con preview antes de guardar"
+  - "Rutas protegidas redirigen a /login si no hay sesión"
+  - "Rutas de admin/instructor redirigen si el rol no coincide"
+  - "Token se refresca automáticamente al expirar"
+  - "Sesión expirada muestra mensaje y redirige a login"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F2: Design System — componentes de layout, Button, Input, Card, Avatar"
+    - "B4: Autenticación y Autorización — endpoints de auth en el backend"
+  integrates_with:
+    - "F4-F9: Todos los nodos del frontend — dependen de la sesión autenticada"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Páginas /login, /register, /forgot-password, /reset-password, /profile
+    - Hook useAuth() con user, isAuthenticated, login, logout, register
+    - Hook useRequireAuth() para componentes que requieren sesión
+    - AuthGuard component para proteger layouts por rol
+    - OAuth callback handler en /auth/callback
+    - Auth store Zustand con persistencia de tokens
+    - Manejo automático de sesión expirada con refresh y redirect
+
+verification: "cd frontend && npm run build && npm run lint"

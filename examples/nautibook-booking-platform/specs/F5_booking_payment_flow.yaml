@@ -1,0 +1,263 @@
+# ============================================================
+# SPEC F5 — Flujo de Reserva y Pago
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Flujo de Reserva y Pago"
+purpose: "Implementar el flujo paso a paso de reserva de clase: selección, detalle con condiciones meteorológicas, confirmación de participantes, pago con Stripe Elements o créditos, y página de confirmación"
+category: "CONSTRUCTION"
+
+input_context: |
+  Design System (F2) y Auth (F3) implementados.
+  Página de detalle de clase (F4) con botón "Reservar" funcional.
+  Cart store (Zustand) configurado en stores/cart.store.ts.
+  Backend operativo con endpoints:
+    - POST /api/bookings (B10)
+    - GET /api/bookings/:id (B10)
+    - POST /api/payments (B12)
+    - GET /api/credit-packs?userId= (B12)
+    - POST /api/bookings/:id/waitlist (B10)
+  Stripe publishable key en NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Instalar Stripe y configurar provider en lib/stripe.ts"
+    detail: |
+      npm install @stripe/stripe-js @stripe/react-stripe-js
+
+      Archivo lib/stripe.ts:
+        import { loadStripe } from '@stripe/stripe-js';
+        export const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
+
+      Crear components/payment/StripeProvider.tsx:
+        Envolver children con <Elements stripe={stripePromise} options={options}>
+        Options: { locale: 'es', appearance: { theme: 'stripe', variables: { colorPrimary: '#0ea5e9' } } }
+
+  - step: 2
+    action: "Crear flujo de reserva step-by-step en app/booking/page.tsx"
+    detail: |
+      Componente BookingFlow con stepper visual (3-4 pasos):
+
+      Stepper header:
+        - Step 1: "Detalle" (icono Info)
+        - Step 2: "Participantes" (icono Users)
+        - Step 3: "Pago" (icono CreditCard)
+        - Step 4: "Confirmación" (icono CheckCircle)
+        - Steps completados: color ocean-500, step actual: highlighted, futuros: gray
+
+      Navegación:
+        - Botón "Siguiente" (solo si paso actual validado)
+        - Botón "Atrás" (excepto paso 1)
+        - Progress bar debajo del stepper
+
+      Estado del flujo:
+        - Leer selectedClass del cart store (Zustand)
+        - Si no hay clase seleccionada → redirect a /classes
+
+  - step: 3
+    action: "Implementar Step 1: Detalle de Clase en components/booking/BookingStepDetail.tsx"
+    detail: |
+      Resumen de la clase seleccionada:
+        - Deporte: nombre + nivel badge
+        - Fecha y hora: formateado legible
+        - Instructor: InstructorCard compacto con bio breve
+        - Ubicación: nombre del spot + mini mapa (SpotMap con 1 marker)
+        - Precio: PriceTag prominente
+        - Condiciones meteorológicas: WeatherDashboard compacto del spot
+
+      Weather warning modal (si weather_status === 'WARNING'):
+        - Dialog modal que se muestra automáticamente
+        - Icono AlertTriangle amarillo grande
+        - Título: "Condiciones de precaución"
+        - Texto: "Las condiciones meteorológicas actuales están en el límite.
+                  Viento: {wind} kt, Oleaje: {waves} m.
+                  La clase podría cancelarse si las condiciones empeoran."
+        - Botón "Entendido, continuar" → cerrar modal, permitir siguiente paso
+        - Botón "Buscar otra fecha" → navegar a /classes
+
+      Si weather_status === 'CANCELLED':
+        - NO se debería llegar aquí (proteger en F4)
+        - Si llega por URL directa: mostrar mensaje "Esta clase ha sido cancelada por condiciones meteorológicas"
+        - Card con sugerencias: "Clases alternativas disponibles"
+        - Listado de 3 clases alternativas (mismo deporte, fechas próximas con buen clima)
+        - Cada alternativa: link a /classes/{altId}
+
+  - step: 4
+    action: "Implementar Step 2: Participantes en components/booking/BookingStepParticipants.tsx"
+    detail: |
+      Selector de participantes:
+        - Stepper numérico (- / número / +)
+        - Mínimo: 1, máximo: plazas disponibles de la clase
+        - Label: "{selected} de {available} plazas disponibles"
+
+      Resumen de precio:
+        - Precio unitario x participantes = Total
+        - Si hay créditos disponibles: sección "Pagar con créditos"
+          - Checkbox "Usar créditos de mi pack"
+          - Select pack si tiene varios: "{pack.sport} - {remaining} créditos restantes"
+          - Si créditos suficientes: "Precio: 0,00 EUR (cubierto por pack)"
+          - Si créditos parciales: mostrar precio restante tras descuento
+
+      Validación:
+        - No permitir más participantes que plazas disponibles
+        - Si 0 plazas: mostrar "Clase completa — unirse a lista de espera"
+
+  - step: 5
+    action: "Implementar Step 3: Pago en components/booking/BookingStepPayment.tsx"
+    detail: |
+      Si pago con créditos (total === 0):
+        - Mostrar resumen: "Pago cubierto con tu pack de créditos"
+        - Detalles del pack usado
+        - Botón "Confirmar reserva" → crear booking directamente
+
+      Si pago con Stripe:
+        - Envolver con StripeProvider
+        - Componente PaymentForm:
+          - Resumen del pedido: clase, fecha, participantes, total
+          - CardElement de Stripe (campo de tarjeta integrado)
+          - Botón "Pagar {total} EUR" con loading state
+
+        Lógica de pago:
+          1. Crear booking: POST /api/bookings { classId, participants, useCredits }
+             → Backend retorna bookingId + clientSecret (Stripe PaymentIntent)
+          2. Confirmar pago: stripe.confirmCardPayment(clientSecret, { payment_method: { card } })
+          3. Si éxito: avanzar a step 4 (confirmación)
+          4. Si error de tarjeta: mostrar error inline debajo del CardElement
+          5. Si error de red: toast de error con botón reintentar
+
+        Manejar errores:
+          - "card_declined" → "Tarjeta rechazada. Intenta con otra tarjeta."
+          - "insufficient_funds" → "Fondos insuficientes."
+          - "expired_card" → "Tarjeta expirada."
+          - Default → "Error al procesar el pago. Inténtalo de nuevo."
+
+  - step: 6
+    action: "Implementar Step 4: Confirmación en components/booking/BookingStepConfirmation.tsx"
+    detail: |
+      Página de éxito:
+        - Icono CheckCircle verde grande con animación de aparición
+        - Título: "¡Reserva confirmada!"
+        - Resumen completo:
+          - Booking ID (referencia)
+          - Deporte + nivel
+          - Fecha y hora
+          - Instructor
+          - Ubicación
+          - Participantes
+          - Total pagado (o "Pagado con créditos")
+          - Weather status actual del spot
+
+      Acciones:
+        - Botón "Añadir al calendario" → generar enlace ICS o Google Calendar:
+          URL: https://calendar.google.com/calendar/render?action=TEMPLATE
+          &text=NautiBook: {sport} clase
+          &dates={startISO}/{endISO}
+          &location={spotName}
+          &details=Instructor: {instructorName}
+        - Botón "Ver mis reservas" → /my-bookings
+        - Botón "Reservar otra clase" → /classes
+
+      Limpiar cart store al llegar a este paso.
+
+  - step: 7
+    action: "Implementar flujo de waitlist en components/booking/WaitlistFlow.tsx"
+    detail: |
+      Si la clase está completa y el usuario hace click en "Lista de espera":
+
+      Modal de waitlist:
+        - Título: "Unirse a la lista de espera"
+        - Texto: "La clase está completa. Te notificaremos si se libera una plaza."
+        - Info: "Posición actual en la lista: {position}"
+        - Botón "Unirme a la lista" → POST /api/bookings/{classId}/waitlist
+        - En éxito:
+          - Toast "Te has unido a la lista de espera (posición {pos})"
+          - Redirect a /my-bookings con tab waitlist
+
+      En /my-bookings:
+        - Bookings con status 'waitlist' muestran posición y opción de cancelar
+        - Cancelar waitlist: DELETE /api/bookings/{id}/waitlist
+
+  - step: 8
+    action: "Crear hooks de booking y payment en hooks/"
+    detail: |
+      Archivo hooks/useBooking.ts:
+        export function useCreateBooking() {
+          return useMutation({
+            mutationFn: (data: CreateBookingRequest) => apiClient.post('/bookings', data),
+            onSuccess: () => queryClient.invalidateQueries(['bookings']),
+          });
+        }
+
+      Archivo hooks/usePayment.ts:
+        export function useProcessPayment() {
+          return useMutation({
+            mutationFn: (data: PaymentRequest) => apiClient.post('/payments', data),
+          });
+        }
+
+      Archivo hooks/useCreditPacks.ts:
+        export function useCreditPacks() {
+          return useQuery({
+            queryKey: ['credit-packs'],
+            queryFn: () => apiClient.get('/credit-packs'),
+          });
+        }
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "NUNCA permitir reservar una clase con weather_status CANCELLED — bloquear en frontend y backend"
+  - "El warning modal para weather WARNING es obligatorio — no se puede saltar sin interacción"
+  - "Stripe card element nunca envía datos de tarjeta al backend — solo client_secret"
+  - "El flujo de pago no debe perder el estado si el usuario navega atrás en el stepper"
+  - "Limpiar el cart store solo después de confirmación exitosa"
+  - "No guardar datos de tarjeta en localStorage ni en ningún store del frontend"
+  - "Mostrar precios siempre en EUR con 2 decimales"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "El flujo paso a paso guía correctamente: detalle → participantes → pago → confirmación"
+  - "El modal de weather warning aparece cuando la clase tiene status WARNING"
+  - "No se puede avanzar al pago si la clase está CANCELLED"
+  - "El selector de participantes no excede las plazas disponibles"
+  - "El pago con Stripe Elements procesa correctamente con tarjeta de test"
+  - "Los errores de tarjeta (rechazada, expirada) se muestran claramente"
+  - "El pago con credit pack descuenta créditos y no cobra por Stripe"
+  - "La página de confirmación muestra resumen completo y link 'añadir al calendario'"
+  - "El flujo de waitlist permite unirse y muestra posición"
+  - "El cart store se limpia tras confirmación exitosa"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F2: Design System — WeatherSemaphore, InstructorCard, PriceTag, SpotMap"
+    - "F3: Auth — usuario autenticado requerido para reservar"
+    - "B10: Sistema de Reservas — POST /api/bookings, waitlist endpoints"
+    - "B12: Pagos y Reembolsos — POST /api/payments, Stripe PaymentIntent"
+  integrates_with:
+    - "F4: Buscador de Clases — navega al flujo de booking desde ClassCard"
+    - "F6: Gestión de Reservas — booking confirmado aparece en /my-bookings"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Flujo de reserva completo en app/booking/page.tsx (4 pasos)
+    - Stripe integration con Elements para pago con tarjeta
+    - Pago con credit packs como alternativa a Stripe
+    - Weather warning modal para clases con status WARNING
+    - Bloqueo de reserva para clases con status CANCELLED con sugerencias
+    - Waitlist flow (unirse, ver posición, cancelar)
+    - Hooks: useCreateBooking, useProcessPayment, useCreditPacks
+    - Página de confirmación con link "añadir al calendario"
+
+verification: "cd frontend && npm run build && npm run lint"

@@ -1,0 +1,798 @@
+# ============================================================
+# SPEC B2 — Modelos de Datos y Migraciones
+# NautiBook — Reserva de Deportes Nauticos
+# ============================================================
+
+title: "Modelos de Datos y Migraciones"
+purpose: "Definir todas las entidades del dominio (User, School, Sport, WeatherThreshold, Instructor, Schedule, Booking, WeatherData, WeatherDecisionLog, Payment, CreditPack, Notification, Spot), crear migraciones de base de datos y seeds de desarrollo"
+category: "DESIGN"
+
+input_context: |
+  Proyecto NestJS inicializado (B1 completado).
+  TypeORM configurado con conexion a PostgreSQL.
+  Estructura de carpetas lista: src/modules/, src/database/.
+  Docker Compose con PostgreSQL 16 ejecutandose.
+  Scripts de migracion disponibles en package.json.
+  Entidades definidas en SWEBOK_DECOMPOSITION.yaml como referencia.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACION
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear entidad base abstracta src/common/entities/base.entity.ts"
+    detail: |
+      @Entity()
+      export abstract class BaseEntity {
+        @PrimaryGeneratedColumn('uuid')
+        id: string;
+
+        @CreateDateColumn({ name: 'created_at' })
+        createdAt: Date;
+
+        @UpdateDateColumn({ name: 'updated_at' })
+        updatedAt: Date;
+      }
+
+      Todas las entidades del proyecto heredaran de esta clase base.
+      Usar UUIDs como primary keys en todas las tablas.
+
+  - step: 2
+    action: "Crear entidad User en src/modules/users/entities/user.entity.ts"
+    detail: |
+      @Entity('users')
+      export class User extends BaseEntity {
+        @Column({ unique: true })
+        email: string;
+
+        @Column({ name: 'password_hash', nullable: true })
+        passwordHash: string;            // nullable para usuarios OAuth
+
+        @Column()
+        name: string;
+
+        @Column({ nullable: true })
+        phone: string;
+
+        @Column({ type: 'enum', enum: ['cliente', 'instructor', 'admin'], default: 'cliente' })
+        role: 'cliente' | 'instructor' | 'admin';
+
+        @Column({ name: 'avatar_url', nullable: true })
+        avatarUrl: string;
+
+        @Column({ name: 'oauth_provider', nullable: true })
+        oauthProvider: string;           // 'google' | 'apple' | null
+
+        @Column({ name: 'oauth_id', nullable: true })
+        oauthId: string;
+
+        @Column({ name: 'refresh_token', nullable: true })
+        refreshToken: string;
+
+        @Column({ name: 'password_reset_token', nullable: true })
+        passwordResetToken: string;
+
+        @Column({ name: 'password_reset_expires', nullable: true })
+        passwordResetExpires: Date;
+
+        @Column({ default: true })
+        active: boolean;
+
+        // Relaciones
+        @OneToMany(() => Booking, booking => booking.user)
+        bookings: Booking[];
+
+        @OneToMany(() => Payment, payment => payment.user)
+        payments: Payment[];
+
+        @OneToMany(() => CreditPack, pack => pack.user)
+        creditPacks: CreditPack[];
+
+        @OneToMany(() => Notification, notification => notification.user)
+        notifications: Notification[];
+      }
+
+      Crear indice unico en email.
+      Crear indice compuesto en (oauth_provider, oauth_id) para busquedas OAuth.
+
+  - step: 3
+    action: "Crear entidad School en src/modules/schools/entities/school.entity.ts"
+    detail: |
+      @Entity('schools')
+      export class School extends BaseEntity {
+        @Column()
+        name: string;
+
+        @Column({ type: 'text', nullable: true })
+        description: string;
+
+        @Column({ name: 'location_lat', type: 'decimal', precision: 10, scale: 7 })
+        locationLat: number;
+
+        @Column({ name: 'location_lng', type: 'decimal', precision: 10, scale: 7 })
+        locationLng: number;
+
+        @Column({ nullable: true })
+        address: string;
+
+        @Column({ default: 'Europe/Madrid' })
+        timezone: string;
+
+        @Column({ name: 'contact_email', nullable: true })
+        contactEmail: string;
+
+        @Column({ name: 'contact_phone', nullable: true })
+        contactPhone: string;
+
+        @Column({ default: true })
+        active: boolean;
+
+        // Relaciones
+        @OneToMany(() => Sport, sport => sport.school)
+        sports: Sport[];
+
+        @OneToMany(() => Spot, spot => spot.school)
+        spots: Spot[];
+
+        @OneToMany(() => Instructor, instructor => instructor.school)
+        instructors: Instructor[];
+      }
+
+  - step: 4
+    action: "Crear entidad Spot en src/modules/spots/entities/spot.entity.ts"
+    detail: |
+      @Entity('spots')
+      export class Spot extends BaseEntity {
+        @Column({ name: 'school_id' })
+        schoolId: string;
+
+        @ManyToOne(() => School, school => school.spots)
+        @JoinColumn({ name: 'school_id' })
+        school: School;
+
+        @Column()
+        name: string;
+
+        @Column({ type: 'decimal', precision: 10, scale: 7 })
+        lat: number;
+
+        @Column({ type: 'decimal', precision: 10, scale: 7 })
+        lng: number;
+
+        @Column({ type: 'text', nullable: true })
+        description: string;
+
+        @Column({ name: 'weather_station_ref', nullable: true })
+        weatherStationRef: string;
+
+        @Column({ default: true })
+        active: boolean;
+
+        // Relaciones
+        @OneToMany(() => WeatherData, wd => wd.spot)
+        weatherData: WeatherData[];
+      }
+
+  - step: 5
+    action: "Crear entidad Sport en src/modules/sports/entities/sport.entity.ts"
+    detail: |
+      @Entity('sports')
+      export class Sport extends BaseEntity {
+        @Column({ name: 'school_id' })
+        schoolId: string;
+
+        @ManyToOne(() => School, school => school.sports)
+        @JoinColumn({ name: 'school_id' })
+        school: School;
+
+        @Column()
+        name: string;                    // vela, surf, kayak, paddle_surf, etc.
+
+        @Column({ type: 'text', nullable: true })
+        description: string;
+
+        @Column({ type: 'enum', enum: ['principiante', 'intermedio', 'avanzado'] })
+        level: 'principiante' | 'intermedio' | 'avanzado';
+
+        @Column({ name: 'max_participants', type: 'int' })
+        maxParticipants: number;
+
+        @Column({ name: 'duration_minutes', type: 'int' })
+        durationMinutes: number;
+
+        @Column({ type: 'decimal', precision: 10, scale: 2 })
+        price: number;
+
+        @Column({ default: true })
+        active: boolean;
+
+        // Relaciones
+        @OneToMany(() => WeatherThreshold, threshold => threshold.sport)
+        weatherThresholds: WeatherThreshold[];
+
+        @OneToMany(() => Booking, booking => booking.sport)
+        bookings: Booking[];
+      }
+
+      Crear indice en (school_id, active) para filtrar deportes activos por escuela.
+
+  - step: 6
+    action: "Crear entidad WeatherThreshold en src/modules/sports/entities/weather-threshold.entity.ts"
+    detail: |
+      @Entity('weather_thresholds')
+      export class WeatherThreshold extends BaseEntity {
+        @Column({ name: 'sport_id' })
+        sportId: string;
+
+        @ManyToOne(() => Sport, sport => sport.weatherThresholds)
+        @JoinColumn({ name: 'sport_id' })
+        sport: Sport;
+
+        @Column({ name: 'max_wind_speed_kt', type: 'decimal', precision: 5, scale: 1, nullable: true })
+        maxWindSpeedKt: number;          // nudos
+
+        @Column({ name: 'max_wave_height_m', type: 'decimal', precision: 4, scale: 2, nullable: true })
+        maxWaveHeightM: number;          // metros
+
+        @Column({ name: 'min_water_temp_c', type: 'decimal', precision: 4, scale: 1, nullable: true })
+        minWaterTempC: number;           // grados celsius
+
+        @Column({ name: 'max_wave_period_s', type: 'decimal', precision: 4, scale: 1, nullable: true })
+        maxWavePeriodS: number;          // segundos
+
+        @Column({ name: 'conditions_json', type: 'jsonb', nullable: true })
+        conditionsJson: Record<string, any>;  // condiciones extra flexibles
+
+        @Column({ type: 'enum', enum: ['cancel', 'warn'], default: 'cancel' })
+        action: 'cancel' | 'warn';
+      }
+
+      Crear indice en sport_id para busquedas rapidas de umbrales por deporte.
+
+  - step: 7
+    action: "Crear entidad Instructor en src/modules/instructors/entities/instructor.entity.ts"
+    detail: |
+      @Entity('instructors')
+      export class Instructor extends BaseEntity {
+        @Column({ name: 'user_id' })
+        userId: string;
+
+        @OneToOne(() => User)
+        @JoinColumn({ name: 'user_id' })
+        user: User;
+
+        @Column({ name: 'school_id' })
+        schoolId: string;
+
+        @ManyToOne(() => School, school => school.instructors)
+        @JoinColumn({ name: 'school_id' })
+        school: School;
+
+        @Column({ type: 'text', nullable: true })
+        bio: string;
+
+        @Column({ type: 'jsonb', nullable: true })
+        certifications: string[];
+
+        @Column({ default: true })
+        active: boolean;
+
+        // Relacion many-to-many con Sport
+        @ManyToMany(() => Sport)
+        @JoinTable({
+          name: 'instructor_sports',
+          joinColumn: { name: 'instructor_id' },
+          inverseJoinColumn: { name: 'sport_id' },
+        })
+        sports: Sport[];
+
+        // Relaciones
+        @OneToMany(() => Schedule, schedule => schedule.instructor)
+        schedules: Schedule[];
+
+        @OneToMany(() => Booking, booking => booking.instructor)
+        bookings: Booking[];
+      }
+
+      Crear indice unico en user_id (un usuario solo puede ser instructor una vez).
+      Crear indice en (school_id, active).
+
+  - step: 8
+    action: "Crear entidad Schedule en src/modules/schedules/entities/schedule.entity.ts"
+    detail: |
+      @Entity('schedules')
+      export class Schedule extends BaseEntity {
+        @Column({ name: 'instructor_id' })
+        instructorId: string;
+
+        @ManyToOne(() => Instructor, instructor => instructor.schedules)
+        @JoinColumn({ name: 'instructor_id' })
+        instructor: Instructor;
+
+        @Column({ name: 'sport_id' })
+        sportId: string;
+
+        @ManyToOne(() => Sport)
+        @JoinColumn({ name: 'sport_id' })
+        sport: Sport;
+
+        @Column({ name: 'spot_id', nullable: true })
+        spotId: string;
+
+        @ManyToOne(() => Spot, { nullable: true })
+        @JoinColumn({ name: 'spot_id' })
+        spot: Spot;
+
+        @Column({ name: 'day_of_week', type: 'int' })
+        dayOfWeek: number;              // 0=domingo, 1=lunes, ..., 6=sabado
+
+        @Column({ name: 'start_time', type: 'time' })
+        startTime: string;
+
+        @Column({ name: 'end_time', type: 'time' })
+        endTime: string;
+
+        @Column({ default: true })
+        recurring: boolean;
+
+        @Column({ name: 'valid_from', type: 'date' })
+        validFrom: Date;
+
+        @Column({ name: 'valid_until', type: 'date', nullable: true })
+        validUntil: Date;
+
+        // Relaciones
+        @OneToMany(() => Booking, booking => booking.schedule)
+        bookings: Booking[];
+      }
+
+      Crear indice en (instructor_id, day_of_week) para busquedas de horario.
+
+  - step: 9
+    action: "Crear entidad Booking en src/modules/bookings/entities/booking.entity.ts"
+    detail: |
+      @Entity('bookings')
+      export class Booking extends BaseEntity {
+        @Column({ name: 'user_id' })
+        userId: string;
+
+        @ManyToOne(() => User, user => user.bookings)
+        @JoinColumn({ name: 'user_id' })
+        user: User;
+
+        @Column({ name: 'schedule_id' })
+        scheduleId: string;
+
+        @ManyToOne(() => Schedule, schedule => schedule.bookings)
+        @JoinColumn({ name: 'schedule_id' })
+        schedule: Schedule;
+
+        @Column({ name: 'sport_id' })
+        sportId: string;
+
+        @ManyToOne(() => Sport, sport => sport.bookings)
+        @JoinColumn({ name: 'sport_id' })
+        sport: Sport;
+
+        @Column({ name: 'instructor_id' })
+        instructorId: string;
+
+        @ManyToOne(() => Instructor, instructor => instructor.bookings)
+        @JoinColumn({ name: 'instructor_id' })
+        instructor: Instructor;
+
+        @Column({ type: 'date' })
+        date: Date;
+
+        @Column({ name: 'start_time', type: 'time' })
+        startTime: string;
+
+        @Column({ name: 'end_time', type: 'time' })
+        endTime: string;
+
+        @Column({
+          type: 'enum',
+          enum: ['confirmed', 'cancelled_weather', 'cancelled_user', 'completed', 'waitlist'],
+          default: 'confirmed',
+        })
+        status: 'confirmed' | 'cancelled_weather' | 'cancelled_user' | 'completed' | 'waitlist';
+
+        @Column({ type: 'int', default: 1 })
+        participants: number;
+
+        @Column({ name: 'cancellation_reason', nullable: true })
+        cancellationReason: string;
+
+        // Relaciones
+        @OneToMany(() => Payment, payment => payment.booking)
+        payments: Payment[];
+
+        @OneToMany(() => WeatherDecisionLog, log => log.booking)
+        weatherDecisions: WeatherDecisionLog[];
+      }
+
+      Crear indice en (user_id, date) para historial de usuario.
+      Crear indice en (schedule_id, date, status) para verificar disponibilidad.
+      Crear indice en (date, status) para consultas administrativas.
+
+  - step: 10
+    action: "Crear entidad WeatherData en src/modules/weather/entities/weather-data.entity.ts"
+    detail: |
+      @Entity('weather_data')
+      export class WeatherData extends BaseEntity {
+        @Column({ name: 'spot_id' })
+        spotId: string;
+
+        @ManyToOne(() => Spot, spot => spot.weatherData)
+        @JoinColumn({ name: 'spot_id' })
+        spot: Spot;
+
+        @Column({ type: 'timestamptz' })
+        timestamp: Date;
+
+        @Column({ name: 'wind_speed_kt', type: 'decimal', precision: 5, scale: 1 })
+        windSpeedKt: number;
+
+        @Column({ name: 'wind_direction_deg', type: 'int' })
+        windDirectionDeg: number;
+
+        @Column({ name: 'wave_height_m', type: 'decimal', precision: 4, scale: 2 })
+        waveHeightM: number;
+
+        @Column({ name: 'wave_period_s', type: 'decimal', precision: 4, scale: 1 })
+        wavePeriodS: number;
+
+        @Column({ name: 'water_temp_c', type: 'decimal', precision: 4, scale: 1, nullable: true })
+        waterTempC: number;
+
+        @Column({ name: 'air_temp_c', type: 'decimal', precision: 4, scale: 1, nullable: true })
+        airTempC: number;
+
+        @Column({
+          name: 'weather_source',
+          type: 'enum',
+          enum: ['open_meteo', 'stormglass'],
+        })
+        weatherSource: 'open_meteo' | 'stormglass';
+
+        @Column({ name: 'forecast_date', type: 'timestamptz' })
+        forecastDate: Date;
+
+        @Column({ name: 'fetched_at', type: 'timestamptz' })
+        fetchedAt: Date;
+      }
+
+      Crear indice unico en (spot_id, forecast_date, weather_source) para upsert.
+      Crear indice en (spot_id, timestamp) para consultas temporales.
+
+  - step: 11
+    action: "Crear entidad WeatherDecisionLog en src/modules/weather/entities/weather-decision-log.entity.ts"
+    detail: |
+      @Entity('weather_decision_logs')
+      export class WeatherDecisionLog extends BaseEntity {
+        @Column({ name: 'booking_id', nullable: true })
+        bookingId: string;
+
+        @ManyToOne(() => Booking, booking => booking.weatherDecisions, { nullable: true })
+        @JoinColumn({ name: 'booking_id' })
+        booking: Booking;
+
+        @Column({ name: 'sport_id' })
+        sportId: string;
+
+        @ManyToOne(() => Sport)
+        @JoinColumn({ name: 'sport_id' })
+        sport: Sport;
+
+        @Column({ name: 'weather_data_id' })
+        weatherDataId: string;
+
+        @ManyToOne(() => WeatherData)
+        @JoinColumn({ name: 'weather_data_id' })
+        weatherData: WeatherData;
+
+        @Column({ type: 'enum', enum: ['approved', 'warning', 'cancelled'] })
+        decision: 'approved' | 'warning' | 'cancelled';
+
+        @Column({ type: 'text', nullable: true })
+        reason: string;
+
+        @Column({ name: 'decided_at', type: 'timestamptz' })
+        decidedAt: Date;
+      }
+
+      Crear indice en (booking_id) para buscar decisiones por reserva.
+      Crear indice en (sport_id, decided_at) para reportes.
+
+  - step: 12
+    action: "Crear entidad Payment en src/modules/payments/entities/payment.entity.ts"
+    detail: |
+      @Entity('payments')
+      export class Payment extends BaseEntity {
+        @Column({ name: 'booking_id', nullable: true })
+        bookingId: string;
+
+        @ManyToOne(() => Booking, booking => booking.payments, { nullable: true })
+        @JoinColumn({ name: 'booking_id' })
+        booking: Booking;
+
+        @Column({ name: 'user_id' })
+        userId: string;
+
+        @ManyToOne(() => User, user => user.payments)
+        @JoinColumn({ name: 'user_id' })
+        user: User;
+
+        @Column({ type: 'decimal', precision: 10, scale: 2 })
+        amount: number;
+
+        @Column({ default: 'EUR' })
+        currency: string;
+
+        @Column({
+          type: 'enum',
+          enum: ['pending', 'paid', 'refunded', 'failed'],
+          default: 'pending',
+        })
+        status: 'pending' | 'paid' | 'refunded' | 'failed';
+
+        @Column({ name: 'payment_method', nullable: true })
+        paymentMethod: string;
+
+        @Column({ name: 'provider_ref', nullable: true })
+        providerRef: string;            // ID de Stripe
+
+        @Column({ name: 'refund_reason', nullable: true })
+        refundReason: string;
+      }
+
+      Crear indice en (user_id, status) para historial de pagos.
+      Crear indice en (booking_id) para buscar pagos de una reserva.
+
+  - step: 13
+    action: "Crear entidad CreditPack en src/modules/payments/entities/credit-pack.entity.ts"
+    detail: |
+      @Entity('credit_packs')
+      export class CreditPack extends BaseEntity {
+        @Column({ name: 'user_id' })
+        userId: string;
+
+        @ManyToOne(() => User, user => user.creditPacks)
+        @JoinColumn({ name: 'user_id' })
+        user: User;
+
+        @Column({ name: 'school_id' })
+        schoolId: string;
+
+        @ManyToOne(() => School)
+        @JoinColumn({ name: 'school_id' })
+        school: School;
+
+        @Column({ name: 'sport_id', nullable: true })
+        sportId: string;
+
+        @ManyToOne(() => Sport, { nullable: true })
+        @JoinColumn({ name: 'sport_id' })
+        sport: Sport;
+
+        @Column({ name: 'total_credits', type: 'int' })
+        totalCredits: number;
+
+        @Column({ name: 'used_credits', type: 'int', default: 0 })
+        usedCredits: number;
+
+        @Column({ name: 'expires_at', type: 'timestamptz' })
+        expiresAt: Date;
+      }
+
+      Crear indice en (user_id, school_id, expires_at) para buscar packs activos.
+
+  - step: 14
+    action: "Crear entidad Notification en src/modules/notifications/entities/notification.entity.ts"
+    detail: |
+      @Entity('notifications')
+      export class Notification extends BaseEntity {
+        @Column({ name: 'user_id' })
+        userId: string;
+
+        @ManyToOne(() => User, user => user.notifications)
+        @JoinColumn({ name: 'user_id' })
+        user: User;
+
+        @Column({
+          type: 'enum',
+          enum: ['booking_confirmed', 'weather_cancel', 'reminder', 'refund'],
+        })
+        type: 'booking_confirmed' | 'weather_cancel' | 'reminder' | 'refund';
+
+        @Column({ type: 'enum', enum: ['push', 'email', 'sms'] })
+        channel: 'push' | 'email' | 'sms';
+
+        @Column()
+        title: string;
+
+        @Column({ type: 'text' })
+        body: string;
+
+        @Column({ default: false })
+        read: boolean;
+
+        @Column({ name: 'sent_at', type: 'timestamptz' })
+        sentAt: Date;
+      }
+
+      Crear indice en (user_id, read, sent_at) para bandeja de notificaciones.
+
+  - step: 15
+    action: "Generar migracion inicial con todas las tablas"
+    detail: |
+      Ejecutar:
+        npm run migration:generate -- -n InitialSchema
+
+      Verificar que la migracion generada incluye CREATE TABLE para:
+        - users
+        - schools
+        - spots
+        - sports
+        - weather_thresholds
+        - instructors
+        - instructor_sports (join table)
+        - schedules
+        - bookings
+        - weather_data
+        - weather_decision_logs
+        - payments
+        - credit_packs
+        - notifications
+
+      Verificar que incluye todos los indices definidos.
+      Verificar que las foreign keys tienen ON DELETE adecuado:
+        - CASCADE para entidades dependientes (e.g., spots al borrar school)
+        - SET NULL para referencias opcionales
+        - RESTRICT para evitar borrado de datos referenciados (e.g., user con bookings)
+
+      Ejecutar la migracion:
+        npm run migration:run
+
+  - step: 16
+    action: "Crear seed de desarrollo en src/database/seeds/development.seed.ts"
+    detail: |
+      Crear script que inserte datos de ejemplo:
+
+      1. Escuelas (2):
+        - "Nautica Costa Brava" (lat: 41.7220, lng: 3.1607) — Tossa de Mar
+        - "Surf Atlantic" (lat: 43.3710, lng: -8.3959) — A Coruna
+
+      2. Spots (3):
+        - "Playa Gran" (school: Costa Brava, lat: 41.7189, lng: 3.1643)
+        - "Cala Giverola" (school: Costa Brava, lat: 41.7336, lng: 2.9414)
+        - "Playa de Riazor" (school: Atlantic, lat: 43.3680, lng: -8.4060)
+
+      3. Deportes (4):
+        - Vela (Costa Brava, principiante, 90min, 65 EUR, max 6)
+        - Surf (Atlantic, principiante, 120min, 45 EUR, max 8)
+        - Kayak (Costa Brava, intermedio, 60min, 35 EUR, max 10)
+        - Paddle Surf (Atlantic, principiante, 60min, 30 EUR, max 12)
+
+      4. Umbrales meteorologicos (4, uno por deporte):
+        - Vela: max viento 25kt, max ola 1.5m, min temp agua 14C, action: cancel
+        - Surf: max viento 35kt, max ola 3.0m, min temp agua 12C, action: warn
+        - Kayak: max viento 20kt, max ola 1.0m, min temp agua 15C, action: cancel
+        - Paddle Surf: max viento 15kt, max ola 0.5m, min temp agua 16C, action: cancel
+
+      5. Usuarios (3):
+        - Admin: admin@nautibook.com (role: admin)
+        - Instructor: instructor@nautibook.com (role: instructor)
+        - Cliente: cliente@nautibook.com (role: cliente)
+        Passwords: bcrypt hash de "Test1234!"
+
+      6. Instructor vinculado a school Costa Brava, deportes: vela, kayak
+
+      Agregar script en package.json:
+        "seed": "ts-node src/database/seeds/development.seed.ts"
+        "seed:run": "npm run seed"
+
+  - step: 17
+    action: "Escribir tests unitarios para validar entidades"
+    detail: |
+      Crear tests en src/database/__tests__/entities.spec.ts:
+
+      Tests:
+        - "User entity should have all required columns"
+        - "School entity should have OneToMany relation with Sports, Spots, Instructors"
+        - "Sport entity should belong to School and have WeatherThresholds"
+        - "WeatherThreshold should have valid action enum values (cancel, warn)"
+        - "Booking should have valid status enum values"
+        - "Payment should have valid status enum values"
+        - "Spot should have lat/lng as decimal with 7 precision"
+        - "Schedule should reference Instructor, Sport, and optionally Spot"
+
+      Usar getMetadataArgsStorage() de TypeORM para verificar metadata
+      de columnas y relaciones sin necesitar la base de datos.
+
+  - step: 18
+    action: "Escribir test de integracion de migraciones"
+    detail: |
+      Crear src/database/__tests__/migrations.integration.spec.ts:
+
+      Tests (requieren PostgreSQL corriendo):
+        - "should run all migrations without errors"
+        - "should create all 14 tables"
+        - "should create instructor_sports join table"
+        - "should have all expected indices"
+        - "should rollback migration cleanly"
+        - "should run seed without errors"
+        - "seed should create 2 schools, 3 spots, 4 sports, 3 users"
+
+      Usar una base de datos de test separada (nautibook_test).
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Usar UUIDs (v4) como primary keys en todas las tablas — no auto-increment"
+  - "Todos los timestamps deben ser timestamptz (con timezone) en UTC"
+  - "Coordenadas lat/lng con precision decimal(10,7) — suficiente para precision de 1cm"
+  - "Precios con precision decimal(10,2) — hasta 99,999,999.99"
+  - "Campos de enum en PostgreSQL — no strings libres para status/roles"
+  - "La migracion debe ser reversible (metodo down() implementado)"
+  - "No usar synchronize:true de TypeORM — siempre migraciones explicitas"
+  - "Foreign keys con ON DELETE apropiado segun la relacion"
+  - "Nombres de columnas en snake_case en la base de datos, camelCase en TypeScript"
+  - "El seed solo debe ejecutarse en entorno de desarrollo — verificar NODE_ENV"
+
+# ============================================================
+# CRITERIOS DE ACEPTACION
+# ============================================================
+acceptance_criteria:
+  - "La migracion crea las 14 tablas definidas mas la tabla join instructor_sports"
+  - "Todas las relaciones tienen foreign keys correctas en la base de datos"
+  - "Los indices definidos existen en la base de datos tras la migracion"
+  - "La migracion es reversible: migration:revert elimina todas las tablas sin errores"
+  - "El seed inserta los datos de ejemplo correctamente"
+  - "Las entidades TypeORM reflejan exactamente los campos de SWEBOK_DECOMPOSITION.yaml"
+  - "Los enums de PostgreSQL se crean para: role, level, booking_status, payment_status, decision, action, weather_source, notification_type, notification_channel"
+  - "Los tests unitarios de entidades pasan"
+  - "Los tests de integracion de migraciones pasan con PostgreSQL"
+  - "npm run build compila sin errores con las nuevas entidades"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — proyecto NestJS, TypeORM, PostgreSQL configurados"
+  integrates_with:
+    - "B3: API Contract — los DTOs de request/response se basan en estas entidades"
+    - "B4: Auth — usa la entidad User para autenticacion y roles"
+    - "B5: Escuelas y Spots — CRUD sobre entidades School y Spot"
+    - "B6: Deportes — CRUD sobre entidades Sport y WeatherThreshold"
+    - "B7: Instructores — CRUD sobre entidades Instructor y Schedule"
+    - "B8: Motor Meteo — persiste en WeatherData"
+    - "B9: Decision Climatica — lee WeatherData y WeatherThreshold, escribe WeatherDecisionLog"
+    - "B10: Reservas — CRUD sobre Booking"
+    - "B12: Pagos — CRUD sobre Payment y CreditPack"
+    - "B13: Notificaciones — CRUD sobre Notification"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Entidades TypeORM completas para todas las tablas del sistema
+    - Migracion inicial ejecutable y reversible
+    - Seed de desarrollo con datos realistas para testing manual
+    - Relaciones definidas:
+      - School 1:N Sports, Spots, Instructors
+      - Sport 1:N WeatherThresholds, Bookings
+      - Instructor N:M Sports (via instructor_sports)
+      - Instructor 1:N Schedules, Bookings
+      - Schedule 1:N Bookings
+      - User 1:N Bookings, Payments, CreditPacks, Notifications
+      - Spot 1:N WeatherData
+      - Booking 1:N Payments, WeatherDecisionLogs
+    - Indices optimizados para las consultas mas frecuentes
+    - 3 usuarios de prueba con credenciales conocidas (Test1234!)
+    - 2 escuelas con spots y deportes configurados con umbrales meteorologicos
+
+verification: "npm run migration:run && npm run seed && npm test -- --testPathPattern=database"

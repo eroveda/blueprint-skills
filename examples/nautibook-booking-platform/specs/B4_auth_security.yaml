@@ -1,0 +1,589 @@
+# ============================================================
+# SPEC B4 — Autenticacion y Autorizacion por Roles
+# NautiBook — Reserva de Deportes Nauticos
+# ============================================================
+
+title: "Autenticacion y Autorizacion por Roles"
+purpose: "Implementar registro, login (email+password y OAuth2 con Google/Apple), JWT con refresh tokens, guards de autorizacion por roles, decoradores de usuario, flujo de reset de password, cumplimiento RGPD y rate limiting en endpoints de autenticacion"
+category: "SECURITY"
+
+input_context: |
+  Proyecto NestJS inicializado (B1) con modelos de datos definidos (B2).
+  Entidad User creada con campos: email, password_hash, name, phone, role,
+  oauth_provider, oauth_id, refresh_token, password_reset_token,
+  password_reset_expires, active.
+  ConfigService disponible con variables: JWT_SECRET.
+  Estructura de carpetas: src/common/guards/, src/common/decorators/.
+  Redis disponible para blacklist de tokens y rate limiting.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACION
+# ============================================================
+instructions:
+  - step: 1
+    action: "Instalar dependencias de autenticacion"
+    detail: |
+      Instalar:
+        npm install @nestjs/jwt @nestjs/passport passport passport-jwt
+        npm install passport-google-oauth20 passport-apple
+        npm install bcrypt
+        npm install @nestjs/throttler
+        npm install -D @types/passport-jwt @types/passport-google-oauth20 @types/bcrypt
+
+  - step: 2
+    action: "Crear modulo Auth en src/modules/auth/auth.module.ts"
+    detail: |
+      Registrar:
+        - AuthService
+        - AuthController
+        - JwtStrategy
+        - GoogleStrategy
+        - AppleStrategy
+        - LocalStrategy
+
+      Importar:
+        - JwtModule.registerAsync({
+            useFactory: (config: ConfigService) => ({
+              secret: config.get('JWT_SECRET'),
+              signOptions: { expiresIn: '15m' },
+            }),
+            inject: [ConfigService],
+          })
+        - PassportModule.register({ defaultStrategy: 'jwt' })
+        - UsersModule (para acceder a UserRepository)
+        - ThrottlerModule
+
+      Exportar: JwtModule, PassportModule (para que otros modulos usen los guards).
+
+  - step: 3
+    action: "Implementar AuthService en src/modules/auth/auth.service.ts"
+    detail: |
+      Inyectar: UserRepository, JwtService, ConfigService, RedisService.
+
+      Metodos:
+
+      async register(dto: RegisterDto): Promise<AuthResponseDto>
+        1. Verificar que el email no existe → 409 si existe
+        2. Hash password con bcrypt (salt rounds: 12)
+        3. Crear usuario con role 'cliente'
+        4. Generar tokens (access + refresh)
+        5. Guardar refresh token hash en user.refreshToken
+        6. Retornar { user, accessToken, refreshToken }
+
+      async login(dto: LoginDto): Promise<AuthResponseDto>
+        1. Buscar usuario por email → 401 si no existe
+        2. Verificar password con bcrypt.compare → 401 si no coincide
+        3. Verificar user.active → 401 si desactivado
+        4. Generar tokens
+        5. Actualizar refresh token hash
+        6. Retornar { user, accessToken, refreshToken }
+
+      async oauthLogin(dto: OAuthLoginDto): Promise<AuthResponseDto>
+        1. Verificar token con el provider (Google/Apple)
+        2. Buscar usuario por (oauth_provider, oauth_id)
+        3. Si no existe, crear usuario nuevo con datos del provider
+        4. Si existe pero con email ya registrado (sin OAuth), vincular cuenta
+        5. Generar tokens
+        6. Retornar { user, accessToken, refreshToken }
+
+      async refreshTokens(refreshToken: string): Promise<TokensDto>
+        1. Verificar JWT del refresh token (secret diferente o mismo con flag)
+        2. Buscar usuario por id del payload
+        3. Comparar hash del refresh token almacenado → 401 si no coincide
+        4. Verificar que el token no esta en blacklist Redis
+        5. Generar nuevos tokens (rotacion de refresh token)
+        6. Actualizar refresh token hash en DB
+        7. Agregar el refresh token anterior a blacklist Redis (TTL 7d)
+        8. Retornar { accessToken, refreshToken }
+
+      async logout(userId: string, refreshToken: string): Promise<void>
+        1. Agregar refresh token a blacklist Redis (TTL 7d)
+        2. Limpiar refresh token en DB (set null)
+
+      async requestPasswordReset(email: string): Promise<void>
+        1. Buscar usuario por email → retornar silenciosamente si no existe (no revelar)
+        2. Generar token aleatorio (crypto.randomBytes(32).toString('hex'))
+        3. Guardar hash del token y expiracion (1 hora) en user
+        4. Enviar email con link de reset (no implementar envio, solo preparar datos)
+        5. Loggear: "Password reset requested for {email}"
+
+      async confirmPasswordReset(token: string, newPassword: string): Promise<void>
+        1. Hashear token recibido
+        2. Buscar usuario con password_reset_token matching y expires > now
+        3. Si no encontrado → 400 "Invalid or expired reset token"
+        4. Hash nueva password con bcrypt
+        5. Actualizar password_hash, limpiar reset token y expiracion
+        6. Invalidar todos los refresh tokens del usuario
+
+      async exportUserData(userId: string): Promise<UserDataExportDto>
+        1. Obtener usuario con todas sus relaciones: bookings, payments, notifications
+        2. Retornar objeto JSON completo con todos los datos del usuario
+        3. Loggear: "GDPR data export for user {userId}"
+
+      async deleteAccount(userId: string): Promise<void>
+        1. Verificar que no hay reservas activas pendientes
+        2. Anonimizar datos: email → deleted_{uuid}@deleted.com, name → "Deleted User"
+        3. Limpiar: phone, avatar_url, oauth_provider, oauth_id
+        4. Marcar active = false
+        5. Invalidar todos los tokens
+        6. Loggear: "GDPR account deletion for user {userId}"
+        NOTA: no borrar el registro para mantener integridad referencial con bookings/payments
+
+  - step: 4
+    action: "Implementar JwtStrategy en src/modules/auth/strategies/jwt.strategy.ts"
+    detail: |
+      @Injectable()
+      export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
+        constructor(config: ConfigService, private userRepo: UserRepository) {
+          super({
+            jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+            secretOrKey: config.get('JWT_SECRET'),
+            ignoreExpiration: false,
+          });
+        }
+
+        async validate(payload: JwtPayload): Promise<User> {
+          const user = await this.userRepo.findOne({ where: { id: payload.sub } });
+          if (!user || !user.active) throw new UnauthorizedException();
+          return user;
+        }
+      }
+
+      Interface JwtPayload:
+        sub: string     // user.id
+        email: string
+        role: string
+        iat: number
+        exp: number
+
+  - step: 5
+    action: "Implementar GoogleStrategy en src/modules/auth/strategies/google.strategy.ts"
+    detail: |
+      @Injectable()
+      export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
+        constructor(config: ConfigService) {
+          super({
+            clientID: config.get('GOOGLE_CLIENT_ID'),
+            clientSecret: config.get('GOOGLE_CLIENT_SECRET'),
+            callbackURL: config.get('GOOGLE_CALLBACK_URL'),
+            scope: ['email', 'profile'],
+          });
+        }
+
+        async validate(accessToken, refreshToken, profile, done) {
+          const user = {
+            email: profile.emails[0].value,
+            name: profile.displayName,
+            oauthProvider: 'google',
+            oauthId: profile.id,
+            avatarUrl: profile.photos?.[0]?.value,
+          };
+          done(null, user);
+        }
+      }
+
+      Agregar variables a .env.example:
+        GOOGLE_CLIENT_ID=your-google-client-id
+        GOOGLE_CLIENT_SECRET=your-google-client-secret
+        GOOGLE_CALLBACK_URL=http://localhost:3000/api/auth/google/callback
+
+  - step: 6
+    action: "Implementar AppleStrategy en src/modules/auth/strategies/apple.strategy.ts"
+    detail: |
+      Usar passport-apple para Sign in with Apple.
+      Configurar con:
+        - clientID (Apple Service ID)
+        - teamID
+        - keyID
+        - privateKeyLocation o privateKeyString
+        - callbackURL
+
+      Agregar variables a .env.example:
+        APPLE_CLIENT_ID=your-apple-service-id
+        APPLE_TEAM_ID=your-apple-team-id
+        APPLE_KEY_ID=your-apple-key-id
+        APPLE_PRIVATE_KEY=your-apple-private-key
+        APPLE_CALLBACK_URL=http://localhost:3000/api/auth/apple/callback
+
+  - step: 7
+    action: "Crear guard JwtAuthGuard en src/common/guards/jwt-auth.guard.ts"
+    detail: |
+      @Injectable()
+      export class JwtAuthGuard extends AuthGuard('jwt') {
+        handleRequest(err, user, info) {
+          if (err || !user) {
+            throw err || new UnauthorizedException('Authentication required');
+          }
+          return user;
+        }
+      }
+
+      Registrar como guard global en AppModule con APP_GUARD:
+        {
+          provide: APP_GUARD,
+          useClass: JwtAuthGuard,
+        }
+
+      Crear decorador @Public() para marcar endpoints publicos:
+        src/common/decorators/public.decorator.ts:
+          export const IS_PUBLIC_KEY = 'isPublic';
+          export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
+      Modificar JwtAuthGuard para respetar @Public():
+        canActivate(context: ExecutionContext) {
+          const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+            context.getHandler(),
+            context.getClass(),
+          ]);
+          if (isPublic) return true;
+          return super.canActivate(context);
+        }
+
+  - step: 8
+    action: "Crear guard RolesGuard en src/common/guards/roles.guard.ts"
+    detail: |
+      Crear decorador @Roles() en src/common/decorators/roles.decorator.ts:
+        export const ROLES_KEY = 'roles';
+        export const Roles = (...roles: ('cliente' | 'instructor' | 'admin')[]) =>
+          SetMetadata(ROLES_KEY, roles);
+
+      Crear RolesGuard:
+        @Injectable()
+        export class RolesGuard implements CanActivate {
+          constructor(private reflector: Reflector) {}
+
+          canActivate(context: ExecutionContext): boolean {
+            const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+              context.getHandler(),
+              context.getClass(),
+            ]);
+            if (!requiredRoles) return true;  // sin @Roles → acceso libre (para autenticados)
+            const { user } = context.switchToHttp().getRequest();
+            return requiredRoles.includes(user.role);
+          }
+        }
+
+      Registrar como guard global (despues de JwtAuthGuard):
+        {
+          provide: APP_GUARD,
+          useClass: RolesGuard,
+        }
+
+  - step: 9
+    action: "Crear decorador @CurrentUser() en src/common/decorators/current-user.decorator.ts"
+    detail: |
+      export const CurrentUser = createParamDecorator(
+        (data: keyof User | undefined, ctx: ExecutionContext) => {
+          const request = ctx.switchToHttp().getRequest();
+          const user = request.user;
+          return data ? user?.[data] : user;
+        },
+      );
+
+      Uso en controllers:
+        @Get('profile')
+        getProfile(@CurrentUser() user: User) { ... }
+
+        @Get('my-id')
+        getMyId(@CurrentUser('id') userId: string) { ... }
+
+  - step: 10
+    action: "Implementar AuthController en src/modules/auth/auth.controller.ts"
+    detail: |
+      @ApiTags('auth')
+      @Controller('api/auth')
+      export class AuthController {
+
+        @Public()
+        @Post('register')
+        @ApiOperation({ summary: 'Registrar nuevo usuario' })
+        @ApiResponse({ status: 201, type: AuthResponseDto })
+        @ApiResponse({ status: 409, description: 'Email already registered' })
+        async register(@Body() dto: RegisterDto) { ... }
+
+        @Public()
+        @Post('login')
+        async login(@Body() dto: LoginDto) { ... }
+
+        @Public()
+        @Post('oauth')
+        async oauthLogin(@Body() dto: OAuthLoginDto) { ... }
+
+        @Public()
+        @Post('refresh')
+        async refreshTokens(@Body() dto: RefreshTokenDto) { ... }
+
+        @Post('logout')
+        @ApiBearerAuth()
+        async logout(@CurrentUser('id') userId: string, @Body() dto: LogoutDto) { ... }
+
+        @Public()
+        @Post('password-reset')
+        async requestPasswordReset(@Body() dto: PasswordResetRequestDto) { ... }
+
+        @Public()
+        @Post('password-reset/confirm')
+        async confirmPasswordReset(@Body() dto: PasswordResetConfirmDto) { ... }
+
+        @Get('profile')
+        @ApiBearerAuth()
+        async getProfile(@CurrentUser() user: User) { ... }
+
+        @Patch('profile')
+        @ApiBearerAuth()
+        async updateProfile(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) { ... }
+
+        @Get('data-export')
+        @ApiBearerAuth()
+        @ApiOperation({ summary: 'Exportar datos del usuario (RGPD)' })
+        async exportData(@CurrentUser('id') userId: string) { ... }
+
+        @Delete('account')
+        @ApiBearerAuth()
+        @ApiOperation({ summary: 'Eliminar cuenta del usuario (RGPD)' })
+        async deleteAccount(@CurrentUser('id') userId: string) { ... }
+
+        // OAuth callbacks
+        @Public()
+        @Get('google')
+        @UseGuards(AuthGuard('google'))
+        async googleAuth() { ... }
+
+        @Public()
+        @Get('google/callback')
+        @UseGuards(AuthGuard('google'))
+        async googleCallback(@Req() req) { ... }
+
+        @Public()
+        @Get('apple')
+        @UseGuards(AuthGuard('apple'))
+        async appleAuth() { ... }
+
+        @Public()
+        @Get('apple/callback')
+        @UseGuards(AuthGuard('apple'))
+        async appleCallback(@Req() req) { ... }
+      }
+
+  - step: 11
+    action: "Configurar rate limiting en endpoints de autenticacion"
+    detail: |
+      Instalar (si no esta ya):
+        npm install @nestjs/throttler
+
+      Configurar ThrottlerModule en AppModule:
+        ThrottlerModule.forRoot([{
+          name: 'short',
+          ttl: 1000,    // 1 segundo
+          limit: 3,     // max 3 requests/segundo
+        }, {
+          name: 'medium',
+          ttl: 60000,   // 1 minuto
+          limit: 20,    // max 20 requests/minuto
+        }, {
+          name: 'long',
+          ttl: 3600000, // 1 hora
+          limit: 100,   // max 100 requests/hora
+        }])
+
+      Aplicar rate limiting estricto en endpoints de auth:
+        @Throttle({ short: { limit: 1, ttl: 1000 }, medium: { limit: 5, ttl: 60000 } })
+        en: login, register, password-reset, refresh
+
+      Aplicar rate limiting mas permisivo en endpoints generales:
+        Registrar ThrottlerGuard como APP_GUARD para aplicar globalmente
+        con los limites por defecto (medium).
+
+      Crear CustomThrottlerGuard que use Redis como storage
+      para que funcione con multiples instancias del servidor:
+        src/common/guards/throttler.guard.ts
+
+  - step: 12
+    action: "Crear helpers de generacion de tokens"
+    detail: |
+      En AuthService, metodo privado:
+
+      private generateTokens(user: User): { accessToken: string; refreshToken: string } {
+        const payload: JwtPayload = {
+          sub: user.id,
+          email: user.email,
+          role: user.role,
+        };
+
+        const accessToken = this.jwtService.sign(payload, {
+          expiresIn: '15m',
+        });
+
+        const refreshToken = this.jwtService.sign(
+          { sub: user.id, type: 'refresh' },
+          { expiresIn: '7d' },
+        );
+
+        return { accessToken, refreshToken };
+      }
+
+      Tiempos de expiracion:
+        - Access token: 15 minutos
+        - Refresh token: 7 dias
+        - Password reset token: 1 hora
+        - Blacklist en Redis TTL: 7 dias (mismo que refresh token)
+
+  - step: 13
+    action: "Escribir tests unitarios en src/modules/auth/__tests__/auth.service.spec.ts"
+    detail: |
+      Tests:
+
+      Registro:
+        - "should register a new user with hashed password"
+        - "should return 409 if email already exists"
+        - "should assign role 'cliente' by default"
+        - "should return access and refresh tokens"
+
+      Login:
+        - "should login with valid credentials"
+        - "should return 401 for invalid email"
+        - "should return 401 for invalid password"
+        - "should return 401 for inactive user"
+
+      Tokens:
+        - "should generate access token with 15min expiry"
+        - "should generate refresh token with 7d expiry"
+        - "should refresh tokens with valid refresh token"
+        - "should reject expired refresh token"
+        - "should reject blacklisted refresh token"
+        - "should rotate refresh token on refresh (old token invalidated)"
+
+      Password Reset:
+        - "should generate reset token and expiration"
+        - "should not reveal if email exists (silent response)"
+        - "should reset password with valid token"
+        - "should reject expired reset token"
+        - "should invalidate all sessions after password reset"
+
+      OAuth:
+        - "should create new user from Google OAuth data"
+        - "should link Google OAuth to existing email account"
+        - "should login existing OAuth user"
+
+      RGPD:
+        - "should export all user data"
+        - "should anonymize user data on deletion"
+        - "should not delete user record (preserve referential integrity)"
+        - "should invalidate all tokens on account deletion"
+
+      Mockear: UserRepository, JwtService, ConfigService, RedisService.
+
+  - step: 14
+    action: "Escribir tests unitarios de guards en src/common/__tests__/guards.spec.ts"
+    detail: |
+      Tests:
+
+      JwtAuthGuard:
+        - "should allow access with valid JWT"
+        - "should deny access without JWT"
+        - "should allow access to @Public() endpoints without JWT"
+
+      RolesGuard:
+        - "should allow access when no @Roles() decorator is present"
+        - "should allow access when user has required role"
+        - "should deny access when user does not have required role"
+        - "should allow admin access to @Roles('admin') endpoints"
+        - "should deny cliente access to @Roles('admin') endpoints"
+        - "should allow multiple roles: @Roles('admin', 'instructor')"
+
+  - step: 15
+    action: "Escribir tests de integracion en src/modules/auth/__tests__/auth.integration.spec.ts"
+    detail: |
+      Tests con supertest contra la aplicacion NestJS:
+
+        - "POST /api/auth/register should create user and return tokens"
+        - "POST /api/auth/register with existing email should return 409"
+        - "POST /api/auth/login with valid credentials should return tokens"
+        - "POST /api/auth/login with invalid password should return 401"
+        - "POST /api/auth/refresh with valid refresh token should return new tokens"
+        - "POST /api/auth/refresh with invalid token should return 401"
+        - "GET /api/auth/profile with valid token should return user data"
+        - "GET /api/auth/profile without token should return 401"
+        - "GET /api/auth/profile should not include password_hash or refresh_token"
+        - "PATCH /api/auth/profile should update user name"
+        - "POST /api/auth/password-reset should return 200 regardless of email existence"
+        - "DELETE /api/auth/account should anonymize user data"
+        - "Rate limiting should block after too many login attempts"
+
+      Usar TestingModule con base de datos de test.
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Passwords hasheados con bcrypt, salt rounds 12 — nunca almacenar en texto plano"
+  - "Access token expira en 15 minutos — no mas"
+  - "Refresh token expira en 7 dias — rotacion obligatoria en cada uso"
+  - "JWT secret minimo 256 bits — validar en configuracion"
+  - "Refresh tokens anteriores se agregan a blacklist en Redis"
+  - "Los endpoints de auth (login, register, reset) deben tener rate limiting estricto"
+  - "Nunca revelar si un email existe o no en el endpoint de password reset"
+  - "No exponer password_hash ni refresh_token en DTOs de respuesta"
+  - "RGPD: el usuario puede exportar y eliminar sus datos en cualquier momento"
+  - "Eliminacion de cuenta = anonimizacion, no borrado fisico (integridad referencial)"
+  - "OAuth tokens del provider se validan server-side, nunca confiar en datos del cliente"
+  - "Todos los endpoints excepto los marcados @Public() requieren JWT valido"
+
+# ============================================================
+# CRITERIOS DE ACEPTACION
+# ============================================================
+acceptance_criteria:
+  - "POST /api/auth/register crea usuario y retorna tokens validos"
+  - "POST /api/auth/login autentica con email+password y retorna tokens"
+  - "POST /api/auth/oauth autentica via Google/Apple y retorna tokens"
+  - "POST /api/auth/refresh rota tokens correctamente"
+  - "POST /api/auth/logout invalida el refresh token"
+  - "El access token expira en exactamente 15 minutos"
+  - "El refresh token expira en exactamente 7 dias"
+  - "Endpoints sin @Public() retornan 401 sin token JWT"
+  - "Endpoints con @Roles('admin') retornan 403 para usuarios no admin"
+  - "@CurrentUser() inyecta el usuario autenticado correctamente"
+  - "POST /api/auth/password-reset inicia flujo de reset"
+  - "GET /api/auth/data-export retorna todos los datos del usuario (RGPD)"
+  - "DELETE /api/auth/account anonimiza los datos del usuario (RGPD)"
+  - "Rate limiting bloquea tras multiples intentos fallidos de login"
+  - "Los passwords se almacenan hasheados con bcrypt (salt 12)"
+  - "Todos los tests unitarios y de integracion pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B1: Project Bootstrap — NestJS, Redis, configuracion de variables de entorno"
+    - "B2: Modelos de Datos — entidad User con campos de auth, OAuth y RGPD"
+  integrates_with:
+    - "B3: API Contract — endpoints de auth documentados en Swagger"
+    - "B5: Escuelas — usa @Roles('admin') para proteger CRUD"
+    - "B6: Deportes — usa @Roles('admin') para proteger configuracion"
+    - "B7: Instructores — usa @Roles('admin', 'instructor') para proteger gestion"
+    - "B10: Reservas — usa @CurrentUser() para filtrar reservas del usuario"
+    - "B12: Pagos — usa @CurrentUser() para asociar pagos al usuario"
+    - "B13: Notificaciones — necesita userId para enviar notificaciones de auth"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - JwtAuthGuard global — todos los endpoints protegidos por defecto
+    - @Public() decorador — para marcar endpoints sin autenticacion
+    - @Roles('cliente', 'instructor', 'admin') decorador — para restringir por rol
+    - RolesGuard global — verifica roles automaticamente
+    - @CurrentUser() decorador — inyecta usuario autenticado en controllers
+    - AuthService.register() — registro con email+password
+    - AuthService.login() — autenticacion con email+password
+    - AuthService.oauthLogin() — autenticacion con Google/Apple
+    - AuthService.refreshTokens() — rotacion de tokens
+    - AuthService.logout() — invalidacion de sesion
+    - Flujo de password reset completo
+    - Endpoints RGPD: data-export y account deletion
+    - Rate limiting configurado: 5 intentos/minuto en login/register
+    - ThrottlerGuard global con limites por defecto
+
+verification: "npm test -- --testPathPattern=auth && npm test -- --testPathPattern=guards"

@@ -1,0 +1,330 @@
+# ============================================================
+# SPEC B14 — Reportes y Métricas Admin
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Reportes y Métricas Admin"
+purpose: "Implementar endpoints de reportes agregados para el dashboard admin: ocupación, cancelaciones, ingresos, deportes populares y fiabilidad meteorológica"
+category: "CONSTRUCTION"
+
+input_context: |
+  Módulos implementados:
+    - Auth (B4): JWT guard, decorador @CurrentUser(), roles (cliente|instructor|admin)
+    - Sistema de Reservas (B10):
+        Tabla bookings con campos: id, user_id, schedule_id, sport_id, instructor_id,
+        spot_id, date, start_time, end_time, status, participants, created_at
+    - Motor de Decisión Climática (B9):
+        Tabla weather_decision_log con campos: id, booking_id, sport_id, weather_data_id,
+        decision (approved|warning|cancelled), reason, decided_at
+    - Pagos (B12):
+        Tabla payments con campos: id, booking_id, user_id, amount, currency, status,
+        refund_amount, refund_reason, created_at
+  Tablas disponibles para consultas agregadas:
+    - bookings
+    - payments
+    - weather_decision_log
+    - schedules
+    - sports
+    - spots
+    - schools
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear módulo en src/modules/report/"
+    detail: |
+      Estructura de archivos:
+        src/modules/report/
+          report.module.ts
+          report.service.ts
+          report.controller.ts
+          dto/
+            report-filters.dto.ts
+            occupancy-report.dto.ts
+            cancellation-report.dto.ts
+            revenue-report.dto.ts
+            weather-reliability-report.dto.ts
+            popular-sports-report.dto.ts
+          __tests__/
+            report.service.spec.ts
+            report.integration.spec.ts
+
+  - step: 2
+    action: "Crear DTOs en src/modules/report/dto/"
+    detail: |
+      ReportFiltersDTO (query params comunes):
+        school_id?: string
+        from: string                  // YYYY-MM-DD (requerido)
+        to: string                    // YYYY-MM-DD (requerido)
+        sport_id?: string
+        spot_id?: string
+        group_by?: 'day' | 'week' | 'month'   // default 'day'
+
+      OccupancyReportDTO:
+        period: string                // fecha o rango según group_by
+        sport_name: string
+        spot_name: string
+        total_slots: number           // plazas totales disponibles
+        booked_slots: number          // plazas reservadas (confirmed + completed)
+        occupancy_rate: number        // porcentaje (0-100)
+        waitlisted: number            // cantidad en lista de espera
+
+      CancellationReportDTO:
+        period: string
+        total_cancellations: number
+        by_weather: number
+        by_user: number
+        by_admin: number
+        cancellation_rate: number     // porcentaje sobre total de reservas
+        weather_cancellation_rate: number  // porcentaje de cancelaciones por clima
+
+      RevenueReportDTO:
+        period: string
+        gross_revenue: number         // ingresos brutos (en céntimos)
+        refunds: number               // total reembolsado (en céntimos)
+        net_revenue: number           // ingresos netos (en céntimos)
+        total_payments: number        // cantidad de pagos
+        total_refunds: number         // cantidad de reembolsos
+        credit_pack_revenue: number   // ingresos por venta de packs
+
+      WeatherReliabilityReportDTO:
+        period: string
+        spot_name: string
+        sport_name: string
+        total_evaluations: number
+        approved_count: number        // semáforo verde
+        warning_count: number         // semáforo amarillo
+        cancelled_count: number       // semáforo rojo
+        approval_rate: number         // porcentaje de aprobados
+        forecast_accuracy: number     // % de acierto: previsión vs condiciones reales al momento de la clase
+
+      PopularSportsReportDTO:
+        sport_id: string
+        sport_name: string
+        total_bookings: number
+        total_participants: number
+        avg_occupancy_rate: number
+        revenue: number
+        rank: number
+
+  - step: 3
+    action: "Implementar ReportService en src/modules/report/report.service.ts"
+    detail: |
+      Inyectar: BookingRepository, PaymentRepository, WeatherDecisionLogRepository,
+                ScheduleRepository, SportRepository, SpotRepository.
+
+      Todos los métodos reciben ReportFiltersDTO y ejecutan queries agregadas.
+
+      === OCUPACIÓN ===
+
+      async getOccupancyReport(filters: ReportFiltersDTO): Promise<OccupancyReportDTO[]>
+        1. Query sobre bookings JOIN schedules JOIN sports JOIN spots
+        2. Agrupar por period (según group_by) + sport + spot
+        3. Calcular:
+           - total_slots = SUM(schedule.max_participants) por franjas en el periodo
+           - booked_slots = COUNT(bookings WHERE status IN ('confirmed', 'completed'))
+           - occupancy_rate = (booked_slots / total_slots) * 100
+           - waitlisted = COUNT(bookings WHERE status = 'waitlist')
+        4. Filtrar por school_id, sport_id, spot_id si se proporcionan
+        5. Ordenar por periodo ASC
+
+      === CANCELACIONES ===
+
+      async getCancellationReport(filters: ReportFiltersDTO): Promise<CancellationReportDTO[]>
+        1. Query sobre bookings
+        2. Agrupar por period
+        3. Calcular:
+           - total_cancellations = COUNT WHERE status LIKE 'cancelled_%'
+           - by_weather = COUNT WHERE status = 'cancelled_weather'
+           - by_user = COUNT WHERE status = 'cancelled_user'
+           - by_admin = COUNT WHERE status = 'cancelled_admin'
+           - total_bookings = COUNT(*) en el periodo
+           - cancellation_rate = (total_cancellations / total_bookings) * 100
+           - weather_cancellation_rate = (by_weather / total_cancellations) * 100
+        4. Filtrar por school_id, sport_id si se proporcionan
+
+      === INGRESOS ===
+
+      async getRevenueReport(filters: ReportFiltersDTO): Promise<RevenueReportDTO[]>
+        1. Query sobre payments JOIN bookings
+        2. Agrupar por period
+        3. Calcular:
+           - gross_revenue = SUM(amount) WHERE status = 'paid'
+           - refunds = SUM(refund_amount) WHERE refund_amount > 0
+           - net_revenue = gross_revenue - refunds
+           - total_payments = COUNT WHERE status = 'paid'
+           - total_refunds = COUNT WHERE status IN ('refunded', 'partially_refunded')
+           - credit_pack_revenue = SUM(amount) de payments de tipo credit_pack purchase
+        4. Filtrar por school_id si se proporciona
+
+      === FIABILIDAD METEOROLÓGICA ===
+
+      async getWeatherReliabilityReport(filters: ReportFiltersDTO): Promise<WeatherReliabilityReportDTO[]>
+        1. Query sobre weather_decision_log JOIN sports JOIN spots
+        2. Agrupar por period + spot + sport
+        3. Calcular:
+           - total_evaluations = COUNT(*)
+           - approved_count = COUNT WHERE decision = 'approved'
+           - warning_count = COUNT WHERE decision = 'warning'
+           - cancelled_count = COUNT WHERE decision = 'cancelled'
+           - approval_rate = (approved_count / total_evaluations) * 100
+           - forecast_accuracy: comparar decisión con condiciones reales registradas
+             al momento de la clase (si weather_data tiene datos reales vs previsión)
+        4. Filtrar por spot_id, sport_id si se proporcionan
+
+      === DEPORTES POPULARES ===
+
+      async getPopularSportsReport(filters: ReportFiltersDTO): Promise<PopularSportsReportDTO[]>
+        1. Query sobre bookings JOIN sports JOIN payments
+        2. Agrupar por sport
+        3. Calcular:
+           - total_bookings = COUNT(bookings WHERE status NOT LIKE 'cancelled_%')
+           - total_participants = SUM(participants)
+           - avg_occupancy_rate = AVG(occupancy) calculado por franja
+           - revenue = SUM(payments.amount) WHERE payments.status = 'paid'
+        4. Ordenar por total_bookings DESC
+        5. Asignar rank (1, 2, 3...)
+        6. Filtrar por school_id si se proporciona
+
+  - step: 4
+    action: "Implementar ReportController en src/modules/report/report.controller.ts"
+    detail: |
+      @Controller('api/v1/reports')
+
+      Todos los endpoints requieren @Roles('admin').
+
+      @Get('occupancy')
+      @Roles('admin')
+      async getOccupancy(@Query() filters: ReportFiltersDTO): Promise<OccupancyReportDTO[]>
+        → Validar que from y to están presentes
+        → Validar que rango no exceda 365 días
+        → Llamar ReportService.getOccupancyReport(filters)
+
+      @Get('cancellations')
+      @Roles('admin')
+      async getCancellations(@Query() filters: ReportFiltersDTO): Promise<CancellationReportDTO[]>
+        → Llamar ReportService.getCancellationReport(filters)
+
+      @Get('revenue')
+      @Roles('admin')
+      async getRevenue(@Query() filters: ReportFiltersDTO): Promise<RevenueReportDTO[]>
+        → Llamar ReportService.getRevenueReport(filters)
+
+      @Get('weather-reliability')
+      @Roles('admin')
+      async getWeatherReliability(@Query() filters: ReportFiltersDTO): Promise<WeatherReliabilityReportDTO[]>
+        → Llamar ReportService.getWeatherReliabilityReport(filters)
+
+      @Get('popular-sports')
+      @Roles('admin')
+      async getPopularSports(@Query() filters: ReportFiltersDTO): Promise<PopularSportsReportDTO[]>
+        → Llamar ReportService.getPopularSportsReport(filters)
+
+  - step: 5
+    action: "Escribir tests unitarios en src/modules/report/__tests__/report.service.spec.ts"
+    detail: |
+      Tests de ocupación:
+        - "should calculate occupancy rate correctly"
+        - "should group by day/week/month"
+        - "should filter by school_id"
+        - "should filter by sport_id"
+        - "should filter by date range"
+        - "should include waitlisted count"
+
+      Tests de cancelaciones:
+        - "should count cancellations by type (weather, user, admin)"
+        - "should calculate cancellation rate"
+        - "should calculate weather cancellation rate"
+        - "should return zero when no cancellations"
+
+      Tests de ingresos:
+        - "should calculate gross revenue, refunds, and net revenue"
+        - "should separate credit pack revenue"
+        - "should handle periods with no payments"
+        - "should filter by school_id"
+
+      Tests de fiabilidad meteorológica:
+        - "should count approved, warning, cancelled decisions"
+        - "should calculate approval rate"
+        - "should group by spot and sport"
+        - "should filter by date range"
+
+      Tests de deportes populares:
+        - "should rank sports by total bookings"
+        - "should exclude cancelled bookings from count"
+        - "should calculate revenue per sport"
+        - "should include participant count"
+
+  - step: 6
+    action: "Escribir tests de integración en src/modules/report/__tests__/report.integration.spec.ts"
+    detail: |
+      Tests e2e:
+        - "GET /api/v1/reports/occupancy returns occupancy data grouped by day"
+        - "GET /api/v1/reports/cancellations returns cancellation breakdown"
+        - "GET /api/v1/reports/revenue returns revenue summary"
+        - "GET /api/v1/reports/weather-reliability returns weather accuracy"
+        - "GET /api/v1/reports/popular-sports returns ranked sports"
+        - "Reports require admin role — 403 for cliente/instructor"
+        - "Reports require from and to date filters — 400 if missing"
+        - "Reports reject date range exceeding 365 days — 400"
+        - "Filters (school_id, sport_id) narrow results correctly"
+        - "group_by=month aggregates data monthly"
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Todos los endpoints requieren role admin — retornar 403 para otros roles"
+  - "Los filtros from y to son obligatorios — retornar 400 si faltan"
+  - "El rango de fechas no puede exceder 365 días"
+  - "Las cantidades monetarias siempre en céntimos (integer)"
+  - "Los porcentajes se retornan con 2 decimales (e.g., 85.50)"
+  - "group_by acepta: day, week, month — default day"
+  - "Las queries deben ser eficientes — usar índices sobre date, status, sport_id"
+  - "No exponer datos personales de usuarios en reportes (solo agregados)"
+  - "Todas las fechas en UTC"
+  - "Si no hay datos para un periodo, retornar el periodo con valores en cero"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "GET /api/v1/reports/occupancy retorna tasa de ocupación por deporte/spot/periodo"
+  - "GET /api/v1/reports/cancellations retorna desglose por tipo (clima/usuario/admin)"
+  - "GET /api/v1/reports/revenue retorna ingresos brutos, reembolsos y netos"
+  - "GET /api/v1/reports/weather-reliability retorna precisión del semáforo meteorológico"
+  - "GET /api/v1/reports/popular-sports retorna ranking de deportes por reservas"
+  - "Todos los endpoints retornan 403 para roles no admin"
+  - "Todos los endpoints retornan 400 si faltan filtros from/to"
+  - "Los filtros school_id, sport_id, spot_id funcionan correctamente"
+  - "group_by agrupa datos por día, semana o mes"
+  - "Todos los tests unitarios y de integración pasan"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B4: Auth y Roles — JWT guard, @Roles('admin')"
+    - "B10: Sistema de Reservas — tabla bookings, schedules"
+    - "B9: Motor de Decisión Climática — tabla weather_decision_log"
+  reads_from:
+    - "B12: Pagos — tabla payments para reportes de ingresos y reembolsos"
+    - "B2: Modelos de Datos — tablas sports, spots, schools"
+
+# ============================================================
+# HANDOFF
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - GET /api/v1/reports/occupancy → frontend panel admin dashboard
+    - GET /api/v1/reports/cancellations → frontend panel admin dashboard
+    - GET /api/v1/reports/revenue → frontend panel admin dashboard
+    - GET /api/v1/reports/weather-reliability → frontend panel admin dashboard
+    - GET /api/v1/reports/popular-sports → frontend panel admin dashboard
+    - Todos los endpoints son consumidos por F9 (Panel de Administración de Escuela)
+    - Los datos son de solo lectura — no modifican ninguna tabla
+
+verification: "npm test -- --testPathPattern=report"

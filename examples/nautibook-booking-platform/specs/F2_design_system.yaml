@@ -1,0 +1,340 @@
+# ============================================================
+# SPEC F2 — Design System y Componentes Base
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Design System y Componentes Base"
+purpose: "Definir la identidad visual náutica del proyecto e implementar todos los componentes UI reutilizables: semáforo meteorológico, cards, pickers, mapa y layouts responsive"
+category: "DESIGN"
+
+input_context: |
+  Proyecto Next.js inicializado con Tailwind CSS y shadcn/ui (F1).
+  Componentes shadcn/ui base ya instalados: Button, Card, Dialog, Input, etc.
+  Utilidad cn() disponible en lib/utils.ts.
+  Tipos TypeScript definidos en types/ (Weather, Sport, Booking, etc.).
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Definir paleta de colores y tema náutico en tailwind.config.ts y globals.css"
+    detail: |
+      Extender tailwind.config.ts con colores personalizados:
+
+      colors: {
+        ocean: {
+          50: '#f0f9ff',   // fondo claro
+          100: '#e0f2fe',
+          200: '#bae6fd',
+          300: '#7dd3fc',
+          400: '#38bdf8',
+          500: '#0ea5e9',  // primario
+          600: '#0284c7',
+          700: '#0369a1',
+          800: '#075985',
+          900: '#0c4a6e',
+        },
+        teal: {
+          50: '#f0fdfa',
+          500: '#14b8a6',  // acento
+          700: '#0f766e',
+        },
+        sand: {
+          50: '#fefce8',
+          100: '#fef9c3',
+          200: '#fef08a',
+        },
+        coral: {
+          500: '#f43f5e',  // danger / cancel
+        },
+        semaphore: {
+          green: '#22c55e',   // APPROVED
+          yellow: '#eab308',  // WARNING
+          red: '#ef4444',     // CANCELLED
+        }
+      }
+
+      CSS variables en globals.css para shadcn/ui:
+        --primary: ocean-500
+        --primary-foreground: white
+        --accent: teal-500
+        --destructive: coral-500
+        --background: ocean-50
+        --card: white
+
+      Fuentes: Inter (body), Plus Jakarta Sans (headings).
+
+  - step: 2
+    action: "Crear componente WeatherSemaphore en components/weather/WeatherSemaphore.tsx"
+    detail: |
+      Props:
+        status: 'APPROVED' | 'WARNING' | 'CANCELLED'
+        size?: 'sm' | 'md' | 'lg' (default 'md')
+        showLabel?: boolean (default true)
+        showIcon?: boolean (default true)
+
+      Renderizado:
+        APPROVED:
+          - Color: semaphore-green, bg-green-100
+          - Icon: lucide CheckCircle
+          - Label: "Apto" / "Good conditions"
+        WARNING:
+          - Color: semaphore-yellow, bg-yellow-100
+          - Icon: lucide AlertTriangle
+          - Label: "Precaución" / "Caution"
+        CANCELLED:
+          - Color: semaphore-red, bg-red-100
+          - Icon: lucide XCircle
+          - Label: "Cancelado" / "Cancelled"
+
+      Layout: flex row con dot indicator (circle div), icon y label.
+      Variante sm: solo dot + icon (no label).
+      Variante lg: dot + icon + label + subtext descriptivo.
+
+      Animación: pulse suave en el dot cuando status es WARNING.
+
+  - step: 3
+    action: "Crear componentes de cards en components/"
+    detail: |
+      Archivo components/sport/SportCard.tsx:
+        Props: sport: Sport, onClick?: () => void
+        Renderizado:
+          - Card con imagen/icono del deporte (vela, surf, kayak, paddle)
+          - Nombre del deporte, nivel (badge), duración, precio
+          - Hover effect con sombra elevada
+          - Icono según deporte: Sailboat, Waves, Ship (lucide)
+
+      Archivo components/instructor/InstructorCard.tsx:
+        Props: instructor: Instructor, compact?: boolean
+        Renderizado:
+          - Avatar, nombre, certificaciones como badges
+          - Deportes que imparte (icons)
+          - Rating (si aplica)
+          - Variante compact: solo avatar + nombre + deporte principal
+
+      Archivo components/booking/BookingCard.tsx:
+        Props: booking: Booking, showActions?: boolean, onCancel?: () => void
+        Renderizado:
+          - Fecha y hora prominentes
+          - Deporte (icon + nombre), instructor nombre
+          - Spot/ubicación
+          - WeatherSemaphore (tamaño sm integrado)
+          - StatusBadge (confirmed, waitlist, cancelled, completed)
+          - Botones: Cancelar, Modificar (si showActions=true y status=confirmed)
+
+  - step: 4
+    action: "Crear componentes de selección en components/"
+    detail: |
+      Archivo components/booking/CalendarPicker.tsx:
+        Props: selectedDate, onDateChange, disabledDates?, minDate?, maxDate?
+        Basado en shadcn/ui Calendar component.
+        Personalizar:
+          - Días con clases disponibles: dot indicator debajo del número
+          - Días con mal clima: fondo rojo suave
+          - Días pasados: deshabilitados
+          - Rango: desde hoy hasta +30 días
+
+      Archivo components/booking/TimeSlotPicker.tsx:
+        Props: slots: TimeSlot[], selectedSlot?, onSlotSelect, loading?
+        Renderizado:
+          - Grid de slots horarios (botones)
+          - Cada slot muestra: hora, plazas disponibles, WeatherSemaphore (sm)
+          - Slot lleno: deshabilitado con label "Completo"
+          - Slot cancelado por clima: deshabilitado con fondo rojo y label "Cancelado"
+          - Slot seleccionado: borde primario, fondo ocean-100
+
+      Archivo components/common/PriceTag.tsx:
+        Props: amount: number, currency?: string, discounted?: number
+        Renderizado:
+          - Precio formateado (ej: "45,00 EUR")
+          - Si discounted: precio tachado + nuevo precio en verde
+          - Tamaño configurable
+
+      Archivo components/common/StatusBadge.tsx:
+        Props: status: BookingStatus | 'active' | 'expired'
+        Renderizado con colores por status:
+          - confirmed: green badge
+          - waitlist: blue badge
+          - cancelled_weather: red badge con icono cloud
+          - cancelled_user: gray badge
+          - completed: teal badge con check
+
+  - step: 5
+    action: "Crear componente SpotMap en components/map/SpotMap.tsx"
+    detail: |
+      Instalar: npm install leaflet react-leaflet @types/leaflet
+
+      Props:
+        spots: SpotWithWeather[]
+        selectedSpotId?: string
+        onSpotSelect?: (spotId: string) => void
+        center?: [lat, lng] (default Tarifa)
+        zoom?: number (default 12)
+        height?: string (default '400px')
+
+      SpotWithWeather:
+        - spot: Spot
+        - weatherStatus: 'APPROVED' | 'WARNING' | 'CANCELLED'
+        - currentWind?: number
+        - currentWaves?: number
+
+      Renderizado:
+        - MapContainer con TileLayer (OpenStreetMap tiles, no requiere API key)
+        - Custom markers por spot, coloreados según weatherStatus:
+          - APPROVED: marker verde
+          - WARNING: marker amarillo
+          - CANCELLED: marker rojo
+        - Popup on click: nombre del spot, weather summary, link "Ver clases"
+        - Marker seleccionado: tamaño mayor, borde destacado
+
+      Importante: usar dynamic import con ssr: false (Leaflet no funciona en SSR):
+        const SpotMap = dynamic(() => import('./SpotMapInner'), { ssr: false })
+
+  - step: 6
+    action: "Crear componentes de layout en components/layout/"
+    detail: |
+      Archivo components/layout/Navbar.tsx:
+        - Logo "NautiBook" con icono de ancla (lucide Anchor)
+        - Links: Inicio, Clases, Mis Reservas (si auth)
+        - Derecha: Bell icon (notificaciones), Avatar dropdown (perfil, logout)
+        - Si no auth: botones Login / Registrarse
+        - Sticky top, backdrop blur, borde inferior sutil
+        - Responsive: hamburger menu en mobile
+
+      Archivo components/layout/Footer.tsx:
+        - Links: Sobre nosotros, Contacto, Términos, Privacidad
+        - Redes sociales iconos
+        - Copyright "NautiBook {year}"
+        - Background ocean-900, texto blanco
+
+      Archivo components/layout/Sidebar.tsx:
+        Props: items: SidebarItem[], role: 'admin' | 'instructor'
+        - Panel lateral para admin e instructor
+        - Items con iconos, labels, badges (ej: notificaciones pendientes)
+        - Collapsible en desktop, sheet en mobile
+        - Highlight item activo según pathname
+
+      Archivo components/layout/MobileBottomNav.tsx:
+        - Barra inferior fija en mobile (hidden en desktop)
+        - 4-5 items: Inicio, Buscar, Mis Reservas, Perfil
+        - Iconos lucide, label debajo
+        - Highlight item activo
+
+  - step: 7
+    action: "Crear layout principal en app/layout.tsx y layouts especializados"
+    detail: |
+      Actualizar app/layout.tsx:
+        - Navbar en la parte superior (siempre visible)
+        - MobileBottomNav en la parte inferior (solo mobile)
+        - Footer (oculto en mobile, visible desktop)
+        - Main content con padding adecuado
+
+      Crear app/(dashboard)/layout.tsx:
+        - Layout para admin e instructor
+        - Sidebar izquierda + content area
+        - Responsive: sidebar como sheet en mobile
+
+      Crear app/(auth)/layout.tsx:
+        - Layout minimalista para login/register
+        - Centrado vertical, background con patrón náutico sutil
+        - Sin navbar ni footer
+
+  - step: 8
+    action: "Crear componentes adicionales de weather en components/weather/"
+    detail: |
+      Archivo components/weather/WeatherWidget.tsx:
+        Props: spotId: string, compact?: boolean
+        Fetching: useQuery con GET /api/weather/{spotId}
+        Renderizado:
+          - Viento: icono Wind + velocidad en kt + dirección (flecha rotada)
+          - Olas: icono Waves + altura en m + periodo en s
+          - Temperatura: icono Thermometer + aire °C
+          - Temperatura agua: icono Droplets + agua °C
+          - WeatherSemaphore prominente
+          - Compact: solo viento + olas + semáforo en una línea
+
+      Archivo components/weather/WeatherForecastMini.tsx:
+        Props: spotId: string
+        Fetching: useQuery con GET /api/weather/{spotId}/forecast
+        Renderizado:
+          - Mini chart o grid de 7 días
+          - Cada día: fecha, icono weather, semáforo dot (coloreado)
+          - Hover/click: expand con detalles de viento y olas
+          - Loading: skeleton
+
+  - step: 9
+    action: "Verificar responsive design y escribir storybook o demo page"
+    detail: |
+      Crear app/design/page.tsx (solo en development):
+        - Galería de todos los componentes creados
+        - Secciones: Colors, Typography, Semaphore, Cards, Pickers, Map, Layout
+        - Cada componente con variantes y estados
+
+      Verificar responsive breakpoints:
+        - Mobile (< 640px): stack vertical, bottom nav, no sidebar
+        - Tablet (640-1024px): grid 2 columnas, sidebar collapsible
+        - Desktop (> 1024px): grid 3-4 columnas, sidebar expandida
+
+      Verificar accesibilidad básica:
+        - Todos los iconos tienen aria-label
+        - Colores del semáforo tienen contraste suficiente (4.5:1 ratio)
+        - Componentes interactivos son focusables con keyboard
+        - WeatherSemaphore transmite info no solo por color (icon + label)
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Mobile-first design — siempre diseñar para mobile primero, luego expandir"
+  - "Semáforo meteorológico NUNCA debe comunicar estado solo con color — siempre icon + text"
+  - "Usar Leaflet con OpenStreetMap tiles (gratuito) — Mapbox solo si hay token configurado"
+  - "Componentes deben ser client components ('use client') solo si necesitan interactividad"
+  - "No instalar librerías UI adicionales — todo con shadcn/ui + Tailwind + componentes custom"
+  - "Iconos exclusivamente de lucide-react — no mezclar icon libraries"
+  - "SpotMap debe cargarse con dynamic import (ssr: false) por incompatibilidad de Leaflet con SSR"
+  - "Todas las strings visibles deben ser fácilmente extraíbles para i18n futuro"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "WeatherSemaphore renderiza correctamente los 3 estados (green, yellow, red) con icon y label"
+  - "SportCard, InstructorCard y BookingCard muestran toda la información requerida"
+  - "CalendarPicker permite seleccionar fecha y muestra días deshabilitados"
+  - "TimeSlotPicker muestra slots con semáforo y estado de disponibilidad"
+  - "SpotMap renderiza markers coloreados por weather status sin errores SSR"
+  - "Navbar es responsive: links en desktop, hamburger menu en mobile"
+  - "MobileBottomNav aparece solo en viewports mobile"
+  - "Sidebar funciona como panel lateral en desktop y sheet en mobile"
+  - "Todos los componentes usan la paleta de colores náutica definida"
+  - "La página /design muestra todos los componentes con sus variantes"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "F1: Frontend Bootstrap — proyecto Next.js con Tailwind y shadcn/ui configurados"
+  integrates_with:
+    - "F3-F9: Todos los nodos de construcción frontend — consumirán estos componentes"
+    - "B8: Motor de Integración Meteorológica — datos para WeatherWidget"
+    - "B9: Motor de Decisión Climática — estados del semáforo"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Paleta de colores náutica configurada en Tailwind (ocean, teal, sand, coral, semaphore)
+    - WeatherSemaphore component (components/weather/WeatherSemaphore.tsx)
+    - WeatherWidget component (components/weather/WeatherWidget.tsx)
+    - WeatherForecastMini component (components/weather/WeatherForecastMini.tsx)
+    - SportCard, InstructorCard, BookingCard (components/)
+    - CalendarPicker, TimeSlotPicker (components/booking/)
+    - SpotMap con markers coloreados (components/map/SpotMap.tsx)
+    - PriceTag, StatusBadge (components/common/)
+    - Navbar, Footer, Sidebar, MobileBottomNav (components/layout/)
+    - Layout principal responsive y layouts especializados (auth, dashboard)
+
+verification: "cd frontend && npm run build && npm run lint"

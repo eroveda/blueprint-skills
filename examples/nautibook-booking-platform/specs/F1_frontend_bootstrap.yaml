@@ -1,0 +1,307 @@
+# ============================================================
+# SPEC F1 — Frontend Bootstrap y Configuración
+# NautiBook — Reserva de Deportes Náuticos
+# ============================================================
+
+title: "Frontend Bootstrap y Configuración"
+purpose: "Inicializar el proyecto frontend con Next.js 14+, App Router, TypeScript, Tailwind CSS, shadcn/ui, cliente API con interceptor JWT y estado global con Zustand"
+category: "OPERATIONS"
+
+input_context: |
+  Contrato API (OpenAPI/Swagger) definido en B3 y disponible.
+  Backend desplegado o ejecutable en local con endpoints REST accesibles.
+  Variables de entorno necesarias:
+    - NEXT_PUBLIC_API_URL (ej: http://localhost:3000/api)
+  Repositorio Git existente con carpeta raíz del proyecto.
+
+# ============================================================
+# INSTRUCCIONES DE IMPLEMENTACIÓN
+# ============================================================
+instructions:
+  - step: 1
+    action: "Crear proyecto Next.js con create-next-app"
+    detail: |
+      npx create-next-app@latest frontend --typescript --tailwind --eslint --app --src-dir=false --import-alias="@/*"
+
+      Estructura de carpetas resultante (ajustar si necesario):
+        frontend/
+        ├── app/                    # App Router pages
+        │   ├── layout.tsx          # Root layout
+        │   ├── page.tsx            # Home page
+        │   ├── globals.css         # Global styles + Tailwind
+        │   └── (auth)/             # Auth route group
+        ├── components/             # Shared UI components
+        │   ├── ui/                 # shadcn/ui components
+        │   └── layout/             # Layout components (Navbar, Footer, etc.)
+        ├── lib/                    # Utilities, API client, config
+        ├── hooks/                  # Custom React hooks
+        ├── types/                  # TypeScript types/interfaces
+        ├── stores/                 # Zustand stores
+        ├── public/                 # Static assets
+        ├── tailwind.config.ts
+        ├── next.config.js
+        └── tsconfig.json
+
+  - step: 2
+    action: "Instalar y configurar dependencias"
+    detail: |
+      Dependencias principales:
+        npm install axios zustand @tanstack/react-query
+        npm install date-fns clsx tailwind-merge
+        npm install lucide-react
+
+      Dependencias de desarrollo:
+        npm install -D @types/node prettier eslint-config-prettier
+
+      Inicializar shadcn/ui:
+        npx shadcn-ui@latest init
+        Seleccionar: style=default, baseColor=slate, cssVariables=yes
+
+      Instalar componentes shadcn/ui base:
+        npx shadcn-ui@latest add button card dialog dropdown-menu
+        npx shadcn-ui@latest add input label select sheet skeleton
+        npx shadcn-ui@latest add toast tabs badge avatar calendar
+
+  - step: 3
+    action: "Configurar cliente API en lib/api/client.ts"
+    detail: |
+      Crear instancia de axios con configuración base:
+
+      const apiClient = axios.create({
+        baseURL: process.env.NEXT_PUBLIC_API_URL,
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      Request interceptor:
+        - Leer access_token del store de auth (Zustand)
+        - Si existe token, añadir header: Authorization: Bearer {token}
+
+      Response interceptor:
+        - Si response.status === 401 y hay refresh_token:
+          1. Llamar POST /api/auth/refresh con refresh_token
+          2. Si éxito: actualizar tokens en store, reintentar request original
+          3. Si fallo: limpiar store de auth, redirigir a /login
+        - Si response.status === 401 y no hay refresh_token:
+          1. Redirigir a /login
+
+      Exportar apiClient como default.
+
+  - step: 4
+    action: "Crear tipos base en types/"
+    detail: |
+      Archivo types/api.ts:
+        - ApiResponse<T> = { data: T, message?: string }
+        - ApiError = { error: string, statusCode: number, details?: Record<string, string[]> }
+        - PaginatedResponse<T> = { data: T[], total: number, page: number, limit: number }
+
+      Archivo types/auth.ts:
+        - User = { id, email, name, phone, role, avatar_url, created_at }
+        - LoginRequest = { email, password }
+        - LoginResponse = { access_token, refresh_token, user: User }
+        - RegisterRequest = { email, password, name, phone }
+
+      Archivo types/booking.ts:
+        - Booking, BookingStatus, CreateBookingRequest
+
+      Archivo types/weather.ts:
+        - WeatherData, WeatherStatus ('APPROVED' | 'WARNING' | 'CANCELLED')
+        - WeatherForecast
+
+      Archivo types/sport.ts:
+        - Sport, SportLevel, WeatherThreshold
+
+      Archivo types/school.ts:
+        - School, Spot, Instructor, Schedule
+
+  - step: 5
+    action: "Configurar Zustand stores en stores/"
+    detail: |
+      Archivo stores/auth.store.ts:
+        interface AuthState {
+          user: User | null
+          accessToken: string | null
+          refreshToken: string | null
+          isAuthenticated: boolean
+          isLoading: boolean
+          login: (credentials: LoginRequest) => Promise<void>
+          loginWithOAuth: (provider: 'google' | 'apple', token: string) => Promise<void>
+          register: (data: RegisterRequest) => Promise<void>
+          logout: () => void
+          refreshAuth: () => Promise<void>
+          updateProfile: (data: Partial<User>) => Promise<void>
+        }
+
+        Usar persist middleware de Zustand para guardar tokens en localStorage.
+        En login: llamar POST /api/auth/login, guardar tokens y user.
+        En logout: limpiar state, llamar POST /api/auth/logout.
+
+      Archivo stores/cart.store.ts:
+        interface CartState {
+          selectedClass: ClassAvailability | null
+          participants: number
+          useCredits: boolean
+          creditPackId: string | null
+          setClass: (cls: ClassAvailability) => void
+          setParticipants: (n: number) => void
+          toggleCredits: (packId?: string) => void
+          clear: () => void
+          getTotalPrice: () => number
+        }
+
+  - step: 6
+    action: "Configurar React Query provider en app/providers.tsx"
+    detail: |
+      'use client';
+
+      Crear QueryProvider component:
+        - Instanciar QueryClient con defaultOptions:
+          queries: { staleTime: 60000, retry: 1, refetchOnWindowFocus: false }
+        - Envolver children con QueryClientProvider
+
+      Crear AppProviders component que combina:
+        - QueryProvider
+        - Toaster (shadcn/ui toast)
+        - Cualquier otro provider futuro
+
+      En app/layout.tsx:
+        - Importar AppProviders
+        - Envolver {children} con <AppProviders>
+        - Configurar metadata: title='NautiBook', description
+        - Importar fuente Inter de next/font/google
+
+  - step: 7
+    action: "Configurar middleware de autenticación en middleware.ts"
+    detail: |
+      Crear middleware.ts en la raíz del proyecto:
+
+      Rutas protegidas (requieren auth):
+        - /my-bookings/*
+        - /profile/*
+        - /instructor/*
+        - /admin/*
+
+      Rutas públicas:
+        - /login, /register, /forgot-password
+        - /, /classes, /classes/*
+
+      Lógica:
+        - Leer cookie o header de auth token
+        - Si ruta protegida y no hay token → redirect a /login?redirect={pathname}
+        - Si ruta de auth (/login, /register) y hay token → redirect a /
+        - Para rutas de instructor: verificar role=instructor
+        - Para rutas de admin: verificar role=admin
+
+      matcher config:
+        - Excluir: /api, /_next, /favicon.ico, archivos estáticos
+
+  - step: 8
+    action: "Configurar variables de entorno y archivos de configuración"
+    detail: |
+      Crear .env.local.example:
+        NEXT_PUBLIC_API_URL=http://localhost:3000/api
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+        NEXT_PUBLIC_MAPBOX_TOKEN=pk.xxx (o usar Leaflet sin token)
+        NEXT_PUBLIC_FCM_VAPID_KEY=xxx
+
+      Crear lib/config.ts:
+        export const config = {
+          apiUrl: process.env.NEXT_PUBLIC_API_URL!,
+          stripeKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!,
+          mapboxToken: process.env.NEXT_PUBLIC_MAPBOX_TOKEN,
+        }
+
+      Actualizar next.config.js:
+        - images: { domains: ['lh3.googleusercontent.com'] } (para avatares OAuth)
+        - output: 'standalone' (para Docker)
+
+  - step: 9
+    action: "Crear utilidades comunes en lib/"
+    detail: |
+      Archivo lib/utils.ts:
+        - cn(...inputs): string → combinar clases CSS con clsx + tailwind-merge
+        - formatDate(date, format?): string → usar date-fns
+        - formatCurrency(amount, currency?): string → Intl.NumberFormat EUR
+        - formatWindSpeed(knots): string → "12 kt"
+        - formatWaveHeight(meters): string → "1.5 m"
+        - formatTemperature(celsius): string → "20°C"
+
+      Archivo lib/api/endpoints.ts:
+        Constantes con todas las rutas de la API:
+        export const API = {
+          auth: { login: '/auth/login', register: '/auth/register', refresh: '/auth/refresh' },
+          weather: { current: (spotId) => `/weather/${spotId}`, forecast: (spotId) => `/weather/${spotId}/forecast` },
+          bookings: { list: '/bookings', create: '/bookings', detail: (id) => `/bookings/${id}` },
+          classes: { search: '/classes' },
+          // ... etc
+        }
+
+  - step: 10
+    action: "Crear página placeholder y verificar que el proyecto arranca"
+    detail: |
+      Actualizar app/page.tsx con contenido mínimo:
+        - Título "NautiBook"
+        - Subtítulo "Reserva de Deportes Náuticos"
+        - Botón "Buscar Clases" (link a /classes)
+        - Usar componentes shadcn/ui (Button, Card)
+
+      Verificar:
+        - npm run dev → arranca sin errores en http://localhost:3001
+        - npm run build → build de producción sin errores
+        - npm run lint → sin warnings ni errores
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+constraints:
+  - "Usar App Router de Next.js 14+ — no Pages Router"
+  - "TypeScript estricto — no usar 'any' excepto en tipos de terceros"
+  - "Tailwind CSS para todos los estilos — no CSS modules ni styled-components"
+  - "shadcn/ui como base de componentes — no instalar otra librería UI (MUI, Chakra, etc.)"
+  - "Zustand para estado global — no Redux ni Context API para estado complejo"
+  - "React Query para estado de servidor (fetching, caching, sync)"
+  - "Todas las llamadas API a través del apiClient configurado — nunca fetch directo"
+  - "Variables de entorno públicas siempre con prefijo NEXT_PUBLIC_"
+  - "No guardar tokens en cookies httpOnly desde el frontend — eso lo maneja el backend"
+
+# ============================================================
+# CRITERIOS DE ACEPTACIÓN
+# ============================================================
+acceptance_criteria:
+  - "npm run dev arranca sin errores y muestra la página home"
+  - "npm run build genera build de producción sin errores"
+  - "npm run lint pasa sin errores"
+  - "El apiClient añade Authorization header cuando hay token"
+  - "El interceptor de refresh renueva el token y reintenta la request original"
+  - "El store de auth persiste entre recargas de página (localStorage)"
+  - "Las rutas protegidas redirigen a /login si no hay token"
+  - "La estructura de carpetas sigue la convención definida"
+  - "shadcn/ui está configurado y los componentes base están disponibles"
+  - "React Query está configurado como provider global"
+
+# ============================================================
+# DEPENDENCIAS
+# ============================================================
+dependencies:
+  hard:
+    - "B3: Contrato API (OpenAPI/Swagger) — definición de endpoints para el API client"
+  integrates_with:
+    - "B4: Autenticación — endpoints de login, register, refresh token"
+    - "F2: Design System — consumirá la estructura y componentes shadcn/ui aquí configurados"
+
+# ============================================================
+# HANDOFF (lo que reciben los nodos downstream)
+# ============================================================
+handoff: |
+  Expone para consumo downstream:
+    - Proyecto Next.js funcional con App Router y TypeScript
+    - apiClient (lib/api/client.ts) con interceptores JWT configurados
+    - Stores Zustand: useAuthStore, useCartStore (stores/)
+    - React Query configurado como provider global
+    - Componentes shadcn/ui base instalados en components/ui/
+    - Tipos TypeScript base en types/ (User, Booking, Weather, Sport, etc.)
+    - Utilidades comunes en lib/utils.ts (cn, formatDate, formatCurrency, etc.)
+    - Middleware de autenticación para rutas protegidas
+    - Variables de entorno documentadas en .env.local.example
+
+verification: "cd frontend && npm run build && npm run lint"
