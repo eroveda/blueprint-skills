@@ -83,7 +83,7 @@ Document the complete auth lifecycle:
 ### [Resource Name] (e.g., Tasks)
 
 #### Create [Resource]
-`POST /api/.../[resource]`
+`POST /api/v1/[resource]`
 
 **Request**:
 ```json
@@ -111,7 +111,7 @@ Document the complete auth lifecycle:
 
 **Example cURL**:
 ```bash
-curl -X POST https://.../api/.../tasks \
+curl -X POST https://.../api/v1/tasks \
   -H "Authorization: Bearer eyJ..." \
   -H "Content-Type: application/json" \
   -d '{"field1": "value", "field2": 123}'
@@ -182,6 +182,27 @@ Standard structure for all events.
 - Current: v1
 - Deprecation policy: 6 months notice via response headers
 ```
+
+## API Versioning
+
+All REST endpoints generated MUST include `/v1/` in the path:
+- `/api/v1/users` (correct)
+- `/api/users` (incorrect)
+
+This applies to:
+- REST endpoints
+- WebSocket paths (when applicable)
+- gRPC service definitions
+
+Document the versioning strategy in the API_CATALOG.md output:
+- Current version: v1
+- Versioning approach: URL path versioning
+- Deprecation policy reference
+
+Do NOT version:
+- MQTT topics (use semantic naming instead)
+- CLI commands (use --version flag)
+- Internal events
 
 ## How to Generate
 
