@@ -97,17 +97,29 @@ validation:
 
 ## Output
 
-Save the complete decomposition to disk so it persists beyond the conversation:
+You MUST save the decomposition as a file. This is not optional.
 
-1. **Write the file** `02-decomposition-output.md` in the user's current working directory
-2. **File content must include:**
-   - The complete YAML block (`project`, `actors`, `entities`, `nodes`, `validation`)
-   - The dependency graph showing node relationships
-   - A recommended build order table (phases with parallelizable nodes)
-   - A closing suggestion: *"Next step: run `/blueprint-skills:swebok-generate-spec` to generate executable specifications for all nodes."*
-3. **After saving**, confirm to the user: *"Saved decomposition to `02-decomposition-output.md`"*
+**Filename**: `02-decomposition-output.md` (exact name, lowercase, with hyphens)
+**Format**: Markdown
+**Location**: Project root directory (cwd)
 
-This file is consumed by `swebok-generate-spec` in the next stage.
+The file MUST contain:
+- The complete YAML output (actors, entities, nodes by layer, validation)
+- The dependency graph (ASCII art)
+- The recommended build order table
+- A "Next step" section pointing to `/blueprint-skills:swebok-generate-spec`
+
+After writing the file, confirm to the user with:
+- Absolute path to the saved file
+- File size in lines
+- Number of nodes generated
+- Suggestion to run the next skill in the chain
+
+DO NOT:
+- Use a different filename
+- Skip the file save
+- Consolidate with universal-framework output (keep them separate)
+- Change format to YAML
 
 ## Example
 

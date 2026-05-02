@@ -156,23 +156,45 @@ verification: "run project test suite"
 
 ## Output
 
-Save all generated specs and execution order to disk so they persist beyond the conversation.
+You MUST save the executable specifications as files. This is not optional.
 
-### Mode 1 — Single file (≤15 specs)
+The save mode depends on the number of specs:
 
-1. **Write all specs** to `03-SPECS.yaml` in the user's current working directory
-2. **Write the execution order** to `03-execution-order.md` with the phase table
+**Mode 1 — Single YAML file (≤15 specs)**:
+- Filename: `03-SPECS.yaml` (exact name, lowercase, with hyphens, .yaml extension)
+- Format: YAML (NOT Markdown — this is critical)
+- Location: Project root directory (cwd)
+- Contains: All specs in a single YAML document with `specs:` array
 
-### Mode 2 — Multiple files (>15 specs)
+**Mode 2 — Multiple YAML files (>15 specs)**:
+- Create directory: `specs/` in project root
+- One file per spec: `specs/<id>_<descriptive_snake_case_name>.yaml`
+  Examples: `specs/B1_project_bootstrap.yaml`, `specs/F10_e2e_tests.yaml`
+- Format: YAML (each file is a complete spec document)
 
-1. **Create a `specs/` directory** in the user's current working directory
-2. **Write each spec** as a separate file: `specs/<id>_<descriptive_name>.yaml`
-   - Example: `specs/B1_project_bootstrap.yaml`, `specs/F10_e2e_tests.yaml`
-   - Use the node ID as prefix followed by a snake_case descriptive name
-3. **Write the execution order** to `03-execution-order.md` with the phase table
+In BOTH modes, also save:
+- `03-execution-order.md` with the phases table
 
-### In both modes
+Each spec (whether in single file or individual file) MUST contain:
+- title
+- purpose
+- category (DESIGN/CONSTRUCTION/SECURITY/TESTING/OPERATIONS)
+- input_context
+- instructions (numbered list)
+- constraints
+- acceptance_criteria
+- dependencies (hard + integrates_with)
+- handoff
+- verification (command to verify completion)
 
-- The execution order file (`03-execution-order.md`) must include the phase table with spec groupings and parallelization notes
-- **After saving**, confirm to the user with the list of files written
-- Suggest: *"Next step: run the documentation skills (`generate-architecture-doc`, `generate-functional-flows`, `generate-user-guide`, `generate-api-catalog`) to complete the blueprint."*
+After writing the files, confirm to the user with:
+- List of files created (with paths)
+- Total number of specs generated
+- Total lines across all files
+- Suggestion to continue with documentation skills
+
+DO NOT:
+- Use Markdown format for specs (must be YAML)
+- Skip the file save
+- Combine specs into a single Markdown document
+- Forget to save 03-execution-order.md
