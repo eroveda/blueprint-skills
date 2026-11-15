@@ -4,6 +4,9 @@
 
 # Blueprint Skills
 
+**What it does:** Claude Code skills that turn a 1–3 sentence project description into a SWEBOK work breakdown, executable specs and IEEE-style docs.<br>
+**Try it:** `claude plugin marketplace add eroveda/blueprint-skills && claude plugin install blueprint-skills@blueprint-skills`, then run `/blueprint-skills:universal-framework` and describe your project.
+
 **Domain decomposition + IEEE SWEBOK documentation for Claude Code**
 
 Generate professional specifications and complete documentation from a project description in minutes.
@@ -24,7 +27,7 @@ Generate professional specifications and complete documentation from a project d
 
 > *Stop generating bad code. Start specifying good code.*
 
-Blueprint Skills are a set of 7 self-orchestrating skills for Claude Code that take a project description and produce:
+Blueprint Skills are a set of 9 self-orchestrating skills for Claude Code that take a project description and produce:
 
 - A **structured decomposition** following IEEE SWEBOK taxonomy
 - **Executable specifications** with verification commands
